@@ -15,7 +15,7 @@ export default async function handler(req, res) {
         // ---------------------------------------------------------
         // 1. [문서 이해] Gemini가 문서에서 핵심 텍스트를 추출 (OCR)
         // ---------------------------------------------------------
-        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
         // 프롬프트: 사용자가 지적한 부분(Reading Strategy)을 특히 주의해서 읽으라고 지시
         const ocrPrompt = `
