@@ -1,0 +1,11 @@
+{
+  "name": "legal-rag-service",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "@pinecone-database/pinecone": "^2.0.0",
+    "@google/generative-ai": "^0.1.0"
+  }
+}
