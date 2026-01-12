@@ -53,6 +53,24 @@ async function fetchPastExamples(queryText) {
 }
 
 export default async function handler(req, res) {
+// ==================================================================
+    // [필수] CORS 설정 (다른 도메인에서의 접속 허용)
+    // ==================================================================
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*'); // 보안을 위해 나중엔 실제 프론트엔드 주소로 변경 권장
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+        'Access-Control-Allow-Headers',
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+    );
+
+    // OPTIONS 요청(Preflight) 처리: 브라우저가 "보내도 돼?" 하고 찔러보는 요청
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
+    }
+    // ==================================================================
+
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
     try {
