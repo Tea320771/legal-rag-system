@@ -53,46 +53,41 @@ async function fetchPastExamples(queryText) {
 }
 
 export default async function handler(req, res) {
-// ==================================================================
-    // [필수] CORS 설정 (다른 도메인에서의 접속 허용)
-    // ==================================================================
+    // CORS 설정
     res.setHeader('Access-Control-Allow-Credentials', true);
-    res.setHeader('Access-Control-Allow-Origin', '*'); // 보안을 위해 나중엔 실제 프론트엔드 주소로 변경 권장
+    res.setHeader('Access-Control-Allow-Origin', '*'); 
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader(
-        'Access-Control-Allow-Headers',
-        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-    );
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
-    // OPTIONS 요청(Preflight) 처리: 브라우저가 "보내도 돼?" 하고 찔러보는 요청
     if (req.method === 'OPTIONS') {
         res.status(200).end();
         return;
     }
-    // ==================================================================
 
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
     try {
-        const { step, fileBase64, mimeType, fileName, docType, extraction, analysis, userFeedback } = req.body;
+        // [수정] files (배열) 수신
+        const { step, files, docType, extraction, analysis, userFeedback } = req.body;
 
         // =========================================================
-        // STEP 1: 분석 요청 (비교 분석 수행)
+        // STEP 1: 분석 요청 (다중 파일 처리)
         // =========================================================
         if (step === 'analyze') {
             const { readingGuide, logicGuideline } = await fetchGithubRules();
             const specificReading = readingGuide[docType] || readingGuide["default"] || {};
             const specificLogic = logicGuideline[docType] || logicGuideline["default"] || {};
 
-            const searchContext = `문서 종류: ${docType}, 파일명: ${fileName}에 대한 해석 오류 및 피드백`;
+            // 파일명들을 합쳐서 검색 컨텍스트 생성
+            const fileNameList = files.map(f => f.fileName).join(", ");
+            const searchContext = `문서 종류: ${docType}, 파일명: ${fileNameList}에 대한 해석 오류 및 피드백`;
             const pastExperiences = await fetchPastExamples(searchContext);
 
-            // [안전 모드] 일반 텍스트로 받아서 수동 파싱
             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
             const analysisPrompt = `
             너는 법률 문서 분석 AI야. 
-            이미지를 읽고 다음 두 가지 관점에서 각각 분석을 수행해.
+            제공된 **총 ${files.length}개의 이미지(문서)**를 종합적으로 읽고 분석해.
 
             1. [Resources]
                - GitHub Rules (Standard): ${JSON.stringify(specificLogic)}
@@ -102,20 +97,28 @@ export default async function handler(req, res) {
             2. [Tasks]
                - Task A: 오직 "GitHub Rules"만 적용해서 분석해. (Standard Logic)
                - Task B: "GitHub Rules"에 "RAG History"까지 반영해서 분석해. (Advanced Logic)
-                 (만약 과거 사례에서 "A가 아니라 B로 해석해"라고 했다면 Task B는 그걸 따라야 함)
 
             **중요: 반드시 아래의 JSON 포맷으로만 답변해.**
             {
-                "extracted_facts": "문서에서 보이는 팩트 (공통)",
+                "extracted_facts": "모든 문서에서 취합한 팩트 (공통)",
                 "logic_baseline": "Task A 결과 (GitHub 규칙만 적용)",
                 "logic_rag": "Task B 결과 (GitHub 규칙 + RAG DB 적용)"
             }
             `;
 
-            const result = await model.generateContent([
-                analysisPrompt,
-                { inlineData: { data: fileBase64, mimeType: mimeType } }
-            ]);
+            // [핵심 수정] 텍스트 프롬프트 + 여러 개의 이미지 파트 결합
+            const promptParts = [{ text: analysisPrompt }];
+            
+            files.forEach(file => {
+                promptParts.push({
+                    inlineData: {
+                        data: file.fileBase64,
+                        mimeType: file.mimeType
+                    }
+                });
+            });
+
+            const result = await model.generateContent(promptParts);
             
             let textResult = result.response.text();
             textResult = textResult.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -128,7 +131,7 @@ export default async function handler(req, res) {
                 aiResponse = {
                     extracted_facts: "파싱 실패",
                     logic_baseline: "파싱 실패",
-                    logic_rag: textResult // 원본이라도 보여줌
+                    logic_rag: textResult
                 };
             }
 
@@ -137,23 +140,25 @@ export default async function handler(req, res) {
                 step: 'analyze',
                 data: {
                     extraction: aiResponse.extracted_facts,
-                    analysis_baseline: aiResponse.logic_baseline, // 규칙 only
-                    analysis_rag: aiResponse.logic_rag            // 규칙 + DB
+                    analysis_baseline: aiResponse.logic_baseline,
+                    analysis_rag: aiResponse.logic_rag
                 }
             });
         }
 
         // =========================================================
-        // STEP 2: 저장 요청 (기존과 동일)
+        // STEP 2: 저장 요청 (파일명 목록 저장)
         // =========================================================
         else if (step === 'save') {
+            // 저장 시 파일명을 콤마로 구분하여 기록
+            const fileNameStr = Array.isArray(files) ? files.map(f => f.fileName).join(", ") : "Unknown File";
+
             const contentForEmbedding = `
             [Doc Type]: ${docType}
             [Verified Extraction]: ${extraction}
             [Verified Analysis (Final)]: ${analysis} 
             [User Instruction]: ${userFeedback}
             `;
-            // *Verified Analysis는 사용자가 최종적으로 선택/수정한 내용을 저장
 
             const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
             const embedResult = await embedModel.embedContent(contentForEmbedding);
@@ -166,7 +171,7 @@ export default async function handler(req, res) {
                 id: uniqueId,
                 values: vector,
                 metadata: {
-                    fileName,
+                    fileName: fileNameStr,
                     docType,
                     type: "verified_instruction",
                     userFeedback: userFeedback, 

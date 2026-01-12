@@ -15,15 +15,13 @@
         .drop-zone { border: 2px dashed #cbd5e1; padding: 30px; text-align: center; cursor: pointer; border-radius: 8px; transition: 0.2s; background: #f9fafb; }
         .drop-zone:hover, .drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
         
-        /* 결과 박스 공통 스타일 */
         .ai-result-box { padding: 15px; margin-bottom: 10px; border-radius: 6px; display: none; border-left-width: 5px; border-left-style: solid; }
         .ai-title { font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem;}
         .ai-content { white-space: pre-wrap; font-size: 0.9rem; color: #334155; font-family: monospace; }
 
-        /* 색상 테마 */
-        .box-blue { background-color: #f0f9ff; border-left-color: #0ea5e9; } /* Extraction */
-        .box-gray { background-color: #f1f5f9; border-left-color: #64748b; } /* Baseline Logic */
-        .box-purple { background-color: #f5f3ff; border-left-color: #8b5cf6; } /* RAG Logic */
+        .box-blue { background-color: #f0f9ff; border-left-color: #0ea5e9; }
+        .box-gray { background-color: #f1f5f9; border-left-color: #64748b; }
+        .box-purple { background-color: #f5f3ff; border-left-color: #8b5cf6; }
         
         select { padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 10px; font-size: 1rem; }
         textarea { width: 100%; height: 100px; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; resize: vertical; margin-bottom: 5px; font-family: monospace;}
@@ -58,10 +56,10 @@
     </div>
 
     <div class="section">
-        <span class="label">Step 1. 학습할 문서 업로드</span>
+        <span class="label">Step 1. 학습할 문서 업로드 (다중 선택 가능)</span>
         <div class="drop-zone" id="dropZone">
-            <p>📄 클릭하여 파일을 선택하거나 이곳으로 드래그하세요.</p>
-            <input type="file" id="fileInput" style="display: none;" accept=".pdf, .png, .jpg, .jpeg">
+            <p>📄 클릭하여 파일을 선택하거나 이곳으로 드래그하세요. (여러 개 가능)</p>
+            <input type="file" id="fileInput" style="display: none;" accept=".pdf, .png, .jpg, .jpeg" multiple>
         </div>
         <div id="file-info" style="margin-top:10px; font-weight:bold; color:#2563eb; display:none;"></div>
     </div>
@@ -102,7 +100,7 @@
 </div>
 
 <script>
-    let selectedFile = null;
+    let selectedFiles = []; // [수정] 배열로 변경
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const logDiv = document.getElementById('status-log');
@@ -110,13 +108,10 @@
     // Display Elements
     const extractionDisplay = document.getElementById('extractionDisplay');
     const extractionText = document.getElementById('extractionText');
-    
-    // Logic Elements (2개)
     const logicBaselineDisplay = document.getElementById('logicBaselineDisplay');
     const logicBaselineText = document.getElementById('logicBaselineText');
     const logicRAGDisplay = document.getElementById('logicRAGDisplay');
     const logicRAGText = document.getElementById('logicRAGText');
-
     const analyzeBtn = document.getElementById('analyzeBtn');
     const saveBtn = document.getElementById('saveBtn');
 
@@ -127,15 +122,18 @@
     dropZone.ondrop = (e) => {
         e.preventDefault();
         dropZone.classList.remove('dragover');
-        handleFile(e.dataTransfer.files[0]);
+        handleFiles(e.dataTransfer.files);
     };
-    fileInput.onchange = (e) => handleFile(e.target.files[0]);
+    fileInput.onchange = (e) => handleFiles(e.target.files);
 
-    function handleFile(file) {
-        if (!file) return;
-        selectedFile = file;
+    // [수정] 파일 처리 함수
+    function handleFiles(files) {
+        if (!files || files.length === 0) return;
+        selectedFiles = Array.from(files); // FileList -> Array 변환
+        
+        const fileNames = selectedFiles.map(f => f.name).join(", ");
         document.getElementById('file-info').style.display = 'block';
-        document.getElementById('file-info').innerText = `선택된 파일: ${file.name}`;
+        document.getElementById('file-info').innerText = `선택된 파일 (${selectedFiles.length}개): ${fileNames}`;
         resetUI();
     }
 
@@ -173,28 +171,35 @@
         });
     }
 
-    // [Step 1] 분석 요청
+    // [Step 1] 분석 요청 (다중 파일)
     async function analyzeDocument() {
-        if (!selectedFile) { alert("파일을 먼저 업로드해주세요."); return; }
+        if (selectedFiles.length === 0) { alert("파일을 먼저 업로드해주세요."); return; }
         
         analyzeBtn.disabled = true;
         analyzeBtn.innerText = "GitHub 규칙 및 DB 검색 중...";
         logDiv.innerHTML = "";
         
         try {
-            const base64 = await fileToBase64(selectedFile);
             const docType = document.getElementById('docType').value;
 
-            log("🚀 Baseline 및 RAG 비교 분석 요청 중...");
+            // [수정] 모든 파일을 Base64로 변환하여 배열로 만듦
+            const filesPayload = await Promise.all(selectedFiles.map(async (file) => {
+                const base64 = await fileToBase64(file);
+                return {
+                    fileBase64: base64,
+                    mimeType: file.type,
+                    fileName: file.name
+                };
+            }));
+
+            log(`🚀 파일 ${selectedFiles.length}개 분석 요청 중...`);
             
             const response = await fetch('/api/rag-train', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     step: 'analyze',
-                    fileBase64: base64,
-                    mimeType: selectedFile.type,
-                    fileName: selectedFile.name,
+                    files: filesPayload, // [중요] 배열 전송
                     docType: docType
                 })
             });
@@ -202,15 +207,13 @@
             const result = await response.json();
             if (!result.success) throw new Error(result.error);
 
-            // 1. Extraction 표시
+            // 결과 표시
             extractionDisplay.style.display = 'block';
             extractionText.innerText = formatAIOutput(result.data.extraction);
             
-            // 2. Baseline Logic 표시 (회색)
             logicBaselineDisplay.style.display = 'block';
             logicBaselineText.innerText = formatAIOutput(result.data.analysis_baseline);
 
-            // 3. RAG Logic 표시 (보라색)
             logicRAGDisplay.style.display = 'block';
             logicRAGText.innerText = formatAIOutput(result.data.analysis_rag);
 
@@ -236,8 +239,6 @@
             const logicRule = document.getElementById('logicRule').value;
             
             const extractionVal = document.getElementById('extractionText').innerText;
-            // *저장 시에는 RAG 결과를 기반으로 하되, 사용자가 수정한 내용을 우선함
-            // 여기서는 사용자가 최종적으로 보고 수정한 logicRule 텍스트를 핵심으로 봄
             const analysisRAGVal = document.getElementById('logicRAGText').innerText;
             const docType = document.getElementById('docType').value;
 
@@ -248,15 +249,18 @@
 
             log("💾 검증된 데이터 저장 중...");
 
+            // [수정] 파일 정보를 다시 전송 (파일명 저장을 위해)
+            const filesPayload = selectedFiles.map(f => ({ fileName: f.name }));
+
             const response = await fetch('/api/rag-train', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     step: 'save',
                     docType: docType,
-                    fileName: selectedFile.name,
+                    files: filesPayload, // 파일 정보(이름) 전송
                     extraction: extractionVal,
-                    analysis: logicRule ? logicRule : analysisRAGVal, // 사용자가 입력한 게 있으면 그걸 저장
+                    analysis: logicRule ? logicRule : analysisRAGVal,
                     userFeedback: finalFeedback
                 })
             });
@@ -268,7 +272,7 @@
             alert("학습 완료!");
             
             resetUI();
-            selectedFile = null;
+            selectedFiles = [];
             document.getElementById('fileInput').value = "";
             document.getElementById('file-info').style.display = 'none';
             document.getElementById('readingStrategy').value = "";
