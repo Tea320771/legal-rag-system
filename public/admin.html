@@ -26,7 +26,7 @@
             display: none; /* 초기엔 숨김 */
         }
         .ai-title { font-weight: bold; color: #0284c7; margin-bottom: 5px; display: block; }
-        .ai-content { white-space: pre-wrap; font-size: 0.95rem; color: #334155; }
+        .ai-content { white-space: pre-wrap; font-size: 0.95rem; color: #334155; font-family: monospace; }
 
         /* 입력 필드 */
         select { padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 10px; font-size: 1rem; }
@@ -57,11 +57,12 @@
     <div style="margin-bottom: 20px;">
         <span class="label">문서 종류 선택</span>
         <select id="docType">
-            <option value="default">일반 문서</option>
+            <option value="default">기본 문서</option>
             <option value="judgment">판결문</option>
-            <option value="contract">계약서</option>
+            <option value="contract">사건위임계약서</option>
             <option value="receipt">영수증/청구서</option>
-            <option value="registry">등기부등본</option>
+            <option value="transfer">이체내역</option>
+            <option value="powerofattorney">사건위임장(소송비용확정신청서 작성 관련)</option>
         </select>
     </div>
 
@@ -167,6 +168,15 @@
         });
     }
 
+    // [핵심 수정] 객체(Object)를 예쁜 텍스트로 변환하는 함수
+    function formatAIOutput(data) {
+        if (typeof data === 'object' && data !== null) {
+            // JSON을 들여쓰기 2칸으로 예쁘게 문자열 변환
+            return JSON.stringify(data, null, 2);
+        }
+        return data;
+    }
+
     // [Step 1] 분석 요청 함수
     async function analyzeDocument() {
         if (!selectedFile) { alert("파일을 먼저 업로드해주세요."); return; }
@@ -197,16 +207,12 @@
             
             if (!result.success) throw new Error(result.error);
 
-            // 결과 화면 표시
+            // [수정됨] 결과를 화면에 뿌릴 때 formatAIOutput 함수 사용
             extractionDisplay.style.display = 'block';
-            extractionText.innerText = result.data.extraction;
+            extractionText.innerText = formatAIOutput(result.data.extraction);
             
             logicDisplay.style.display = 'block';
-            logicText.innerText = result.data.analysis;
-
-            // 사용자 편의를 위해 수정할 수 있도록 textarea에도 기본값 채워주기 (선택사항)
-            // document.getElementById('readingStrategy').value = result.data.extraction;
-            // document.getElementById('logicRule').value = result.data.analysis;
+            logicText.innerText = formatAIOutput(result.data.analysis);
 
             log("✅ 분석 완료! 결과를 확인하고 수정해주세요.");
             
@@ -229,6 +235,8 @@
         try {
             const readingStrategy = document.getElementById('readingStrategy').value;
             const logicRule = document.getElementById('logicRule').value;
+            
+            // 저장할 때도 텍스트가 아닌 DOM 요소의 텍스트를 가져옴
             const extractionVal = document.getElementById('extractionText').innerText;
             const analysisVal = document.getElementById('logicText').innerText;
             const docType = document.getElementById('docType').value;
