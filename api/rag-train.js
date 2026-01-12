@@ -26,7 +26,7 @@ async function fetchGithubRules() {
     }
 }
 
-// 2. Pinecone에서 유사 사례 검색
+// 2. Pinecone에서 유사 사례 검색 (불량 데이터 방어 강화)
 async function fetchPastExamples(queryText) {
     try {
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
@@ -35,19 +35,39 @@ async function fetchPastExamples(queryText) {
 
         const index = pinecone.index("legal-rag-db");
         
-        const queryResponse = await index.query({
-            vector: vector,
-            topK: 3,
-            includeMetadata: true
-        });
+        try {
+            const queryResponse = await index.query({
+                vector: vector,
+                topK: 3,
+                includeMetadata: true
+            });
 
-        const pastContext = queryResponse.matches.map(match => {
-            return `- 과거 유사 사례 (${match.metadata.docType}): ${match.metadata.userFeedback || "피드백 없음"}`;
-        }).join("\n");
+            // 1. 검색 결과 자체가 없는 경우 방어
+            if (!queryResponse || !queryResponse.matches || queryResponse.matches.length === 0) {
+                return "관련된 과거 사례가 없습니다.";
+            }
 
-        return pastContext || "유사한 과거 사례 없음.";
+            const pastContext = queryResponse.matches.map(match => {
+                // 2. [핵심 수정] 검색은 됐는데 '메타데이터'가 비어있는 '불량 데이터' 방어
+                // match.metadata가 없으면 빈 객체 {}를 대신 사용하여 에러 방지
+                const meta = match.metadata || {}; 
+                
+                // 속성이 없으면 '알 수 없음' 등으로 대체
+                const docType = meta.docType || '문서유형 미상';
+                const feedback = meta.userFeedback || meta.fullContent || "내용 없음";
+                
+                return `- 과거 유사 사례 (${docType}): ${feedback}`;
+            }).join("\n");
+
+            return pastContext;
+
+        } catch (pineconeError) {
+            console.warn("⚠️ Pinecone 검색 중 문제 발생 (무시하고 진행):", pineconeError.message);
+            return "과거 사례 검색 실패 (DB 연결 또는 데이터 문제)";
+        }
+
     } catch (error) {
-        console.error("RAG 검색 실패:", error);
+        console.error("RAG 로직 내부 오류:", error);
         return "과거 데이터 검색 불가.";
     }
 }
