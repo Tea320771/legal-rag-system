@@ -5,7 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 1. GitHub Raw 데이터 가져오기 (정적 규칙)
+// 1. GitHub Raw 데이터 가져오기
 async function fetchGithubRules() {
     const BASE_URL = 'https://raw.githubusercontent.com/Tea320771/myweb/main';
     try {
@@ -26,7 +26,7 @@ async function fetchGithubRules() {
     }
 }
 
-// 2. Pinecone에서 유사 사례 검색 (동적 경험)
+// 2. Pinecone에서 유사 사례 검색
 async function fetchPastExamples(queryText) {
     try {
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
@@ -53,14 +53,13 @@ async function fetchPastExamples(queryText) {
 }
 
 export default async function handler(req, res) {
-    // POST 요청만 허용
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
     try {
         const { step, fileBase64, mimeType, fileName, docType, extraction, analysis, userFeedback } = req.body;
 
         // =========================================================
-        // STEP 1: 분석 요청 (저장 X, 결과만 반환)
+        // STEP 1: 분석 요청 (비교 분석 수행)
         // =========================================================
         if (step === 'analyze') {
             const { readingGuide, logicGuideline } = await fetchGithubRules();
@@ -70,26 +69,28 @@ export default async function handler(req, res) {
             const searchContext = `문서 종류: ${docType}, 파일명: ${fileName}에 대한 해석 오류 및 피드백`;
             const pastExperiences = await fetchPastExamples(searchContext);
 
-            // [안전 모드] responseMimeType 옵션을 제거하고 일반 텍스트로 받음 (버전 호환성 해결)
+            // [안전 모드] 일반 텍스트로 받아서 수동 파싱
             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
             const analysisPrompt = `
             너는 법률 문서 분석 AI야. 
-            이미지를 읽고 [Rules]와 [History]를 참고하여 정확하게 정보를 추출하고 해석해.
+            이미지를 읽고 다음 두 가지 관점에서 각각 분석을 수행해.
 
-            1. [Rules - GitHub]
-               - Extraction Strategy: ${JSON.stringify(specificReading)}
-               - Logic Rules: ${JSON.stringify(specificLogic)}
+            1. [Resources]
+               - GitHub Rules (Standard): ${JSON.stringify(specificLogic)}
+               - Extraction Guide: ${JSON.stringify(specificReading)}
+               - RAG History (Past Experience): ${pastExperiences}
 
-            2. [History - Past Feedback]
-               과거에 사용자가 지적한 내용이야. 같은 실수를 반복하지 마:
-               ${pastExperiences}
+            2. [Tasks]
+               - Task A: 오직 "GitHub Rules"만 적용해서 분석해. (Standard Logic)
+               - Task B: "GitHub Rules"에 "RAG History"까지 반영해서 분석해. (Advanced Logic)
+                 (만약 과거 사례에서 "A가 아니라 B로 해석해"라고 했다면 Task B는 그걸 따라야 함)
 
-            **중요: 반드시 아래의 JSON 포맷으로만 답변해. 마크다운(\`\`\`)이나 다른 설명은 절대 쓰지 마.**
-            
+            **중요: 반드시 아래의 JSON 포맷으로만 답변해.**
             {
-                "extracted_facts": "문서에서 보이는 그대로의 팩트 (주문, 청구취지, 금액, 날짜 등)",
-                "logic_analysis": "위 팩트를 바탕으로 한 법적 해석 결과, 계산 결과, 혹은 쟁점 분석"
+                "extracted_facts": "문서에서 보이는 팩트 (공통)",
+                "logic_baseline": "Task A 결과 (GitHub 규칙만 적용)",
+                "logic_rag": "Task B 결과 (GitHub 규칙 + RAG DB 적용)"
             }
             `;
 
@@ -98,7 +99,6 @@ export default async function handler(req, res) {
                 { inlineData: { data: fileBase64, mimeType: mimeType } }
             ]);
             
-            // 결과 텍스트 정제 (마크다운 제거)
             let textResult = result.response.text();
             textResult = textResult.replace(/```json/g, "").replace(/```/g, "").trim();
 
@@ -107,10 +107,10 @@ export default async function handler(req, res) {
                 aiResponse = JSON.parse(textResult);
             } catch (e) {
                 console.error("JSON Parsing Error:", e);
-                // 파싱 실패 시 원본 텍스트를 그대로 보여줌
                 aiResponse = {
-                    extracted_facts: "데이터 파싱 실패 (원본 참조)",
-                    logic_analysis: textResult
+                    extracted_facts: "파싱 실패",
+                    logic_baseline: "파싱 실패",
+                    logic_rag: textResult // 원본이라도 보여줌
                 };
             }
 
@@ -119,21 +119,23 @@ export default async function handler(req, res) {
                 step: 'analyze',
                 data: {
                     extraction: aiResponse.extracted_facts,
-                    analysis: aiResponse.logic_analysis
+                    analysis_baseline: aiResponse.logic_baseline, // 규칙 only
+                    analysis_rag: aiResponse.logic_rag            // 규칙 + DB
                 }
             });
         }
 
         // =========================================================
-        // STEP 2: 저장 요청 (사용자 검토 후 최종 데이터 저장)
+        // STEP 2: 저장 요청 (기존과 동일)
         // =========================================================
         else if (step === 'save') {
             const contentForEmbedding = `
             [Doc Type]: ${docType}
             [Verified Extraction]: ${extraction}
-            [Verified Analysis]: ${analysis}
+            [Verified Analysis (Final)]: ${analysis} 
             [User Instruction]: ${userFeedback}
             `;
+            // *Verified Analysis는 사용자가 최종적으로 선택/수정한 내용을 저장
 
             const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
             const embedResult = await embedModel.embedContent(contentForEmbedding);
@@ -160,7 +162,6 @@ export default async function handler(req, res) {
 
     } catch (error) {
         console.error("Handler Error:", error);
-        // 에러 발생 시에도 반드시 JSON으로 응답해야 프론트엔드가 죽지 않음
         res.status(500).json({ error: error.message });
     }
 }
