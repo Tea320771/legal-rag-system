@@ -7,9 +7,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // 1. GitHub Raw 데이터 가져오기 (정적 규칙)
 async function fetchGithubRules() {
-    // 사용자 GitHub Raw URL (main 브랜치 기준)
     const BASE_URL = 'https://raw.githubusercontent.com/Tea320771/myweb/main';
-    
     try {
         const [readingRes, logicRes] = await Promise.all([
             fetch(`${BASE_URL}/reading_guide.json`),
@@ -24,7 +22,7 @@ async function fetchGithubRules() {
         return { readingGuide, logicGuideline };
     } catch (error) {
         console.error("GitHub 규칙 로드 실패:", error);
-        return { readingGuide: {}, logicGuideline: {} }; // 실패 시 빈 객체 반환
+        return { readingGuide: {}, logicGuideline: {} };
     }
 }
 
@@ -37,16 +35,15 @@ async function fetchPastExamples(queryText) {
 
         const index = pinecone.index("legal-rag-db");
         
-        // 가장 유사한 과거 처리 사례 3개 조회
         const queryResponse = await index.query({
             vector: vector,
             topK: 3,
             includeMetadata: true
         });
 
-        // 메타데이터에서 과거 피드백이나 처리 결과를 텍스트로 추출
         const pastContext = queryResponse.matches.map(match => {
-            return `- 과거 유사 사례 (${match.metadata.docType}): ${match.metadata.userFeedback || match.metadata.fullContent}`;
+            // 과거에 사용자가 수정했던 피드백 내용을 가져옴
+            return `- 과거 유사 사례 (${match.metadata.docType}): ${match.metadata.userFeedback || "피드백 없음"}`;
         }).join("\n");
 
         return pastContext || "유사한 과거 사례 없음.";
@@ -60,71 +57,75 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
     try {
-        const { step, fileBase64, mimeType, fileName, docType, analysisResult, userFeedback } = req.body;
+        // step: 'analyze' (분석만) | 'save' (저장)
+        const { step, fileBase64, mimeType, fileName, docType, extraction, analysis, userFeedback } = req.body;
 
-        // ---------------------------------------------------------
-        // STEP 1: [분석 단계] GitHub 규칙 + RAG 과거 사례 -> Gemini 분석
-        // ---------------------------------------------------------
+        // =========================================================
+        // STEP 1: 분석 요청 (저장 X, 결과만 반환)
+        // =========================================================
         if (step === 'analyze') {
-            
-            // A. GitHub 규칙 가져오기
+            // A. 외부 규칙 및 과거 사례 수집
             const { readingGuide, logicGuideline } = await fetchGithubRules();
-            const specificReading = readingGuide[docType] || readingGuide["default"];
-            const specificLogic = logicGuideline[docType] || logicGuideline["default"];
+            const specificReading = readingGuide[docType] || readingGuide["default"] || {};
+            const specificLogic = logicGuideline[docType] || logicGuideline["default"] || {};
 
-            // B. RAG DB에서 유사 사례 검색
-            // "이 문서는 [docType]이고 파일명은 [fileName]이다"라는 맥락으로 과거 데이터를 찾음
-            const searchContext = `문서 종류: ${docType}, 파일명: ${fileName}에 대한 해석 지침`;
+            const searchContext = `문서 종류: ${docType}, 파일명: ${fileName}에 대한 해석 오류 및 피드백`;
             const pastExperiences = await fetchPastExamples(searchContext);
 
-            // C. Gemini 모델 준비 및 프롬프트 구성
-            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+            // B. JSON 출력을 위한 모델 설정
+            const model = genAI.getGenerativeModel({ 
+                model: "gemini-2.5-flash",
+                generationConfig: { responseMimeType: "application/json" }
+            });
 
+            // C. 프롬프트 구성
             const analysisPrompt = `
-            너는 숙련된 법률 문서 분석 AI야. 아래 제공된 3가지 정보를 종합하여 문서를 분석해.
+            너는 법률 문서 분석 AI야. 
+            이미지를 읽고 [Rules]와 [History]를 참고하여 정확하게 정보를 추출하고 해석해.
 
-            1. [Standard Rules - GitHub 매뉴얼]
-               - 읽기 전략: ${JSON.stringify(specificReading)}
-               - 해석 논리: ${JSON.stringify(specificLogic)}
+            1. [Rules - GitHub]
+               - Extraction Strategy: ${JSON.stringify(specificReading)}
+               - Logic Rules: ${JSON.stringify(specificLogic)}
 
-            2. [Historical Context - 우리 회사의 과거 유사 사례]
-               이전에 사용자가 피드백했던 내용을 참고해서 실수를 반복하지 마:
+            2. [History - Past Feedback]
+               과거에 사용자가 지적한 내용이야. 같은 실수를 반복하지 마:
                ${pastExperiences}
 
-            3. [Instruction]
-               위 '매뉴얼'을 기준으로 분석하되, '과거 사례'에서 지적된 사항을 특히 주의하여 문서를 해석해줘.
-               결과는 사용자가 검토하기 좋게 [핵심 내용], [법적 쟁점], [해석 결과]로 구조화해서 출력해.
+            반드시 아래 JSON 스키마에 맞춰서 답변해:
+            {
+                "extracted_facts": "문서에서 보이는 그대로의 팩트 (주문, 청구취지, 금액, 날짜 등)",
+                "logic_analysis": "위 팩트를 바탕으로 한 법적 해석 결과, 계산 결과, 혹은 쟁점 분석"
+            }
             `;
 
-            // D. 분석 실행
+            // D. 실행
             const result = await model.generateContent([
                 analysisPrompt,
                 { inlineData: { data: fileBase64, mimeType: mimeType } }
             ]);
-            const aiDraftText = result.response.text();
+            
+            const aiResponse = JSON.parse(result.response.text());
 
             return res.status(200).json({
                 success: true,
                 step: 'analyze',
                 data: {
-                    aiDraftText,
-                    references: {
-                        githubRules: "Applied",
-                        ragContext: pastExperiences.substring(0, 100) + "..." // 참고한 과거 사례 요약
-                    }
+                    extraction: aiResponse.extracted_facts,
+                    analysis: aiResponse.logic_analysis
                 }
             });
         }
 
-        // ---------------------------------------------------------
-        // STEP 2: [저장 단계] 검토 완료된 데이터 저장 (기존과 동일)
-        // ---------------------------------------------------------
+        // =========================================================
+        // STEP 2: 저장 요청 (사용자 검토 후 최종 데이터 저장)
+        // =========================================================
         else if (step === 'save') {
-            // (STEP 2 코드는 이전 답변과 동일하게 유지 - 사용자의 최종 피드백을 저장)
+            // 사용자가 수정한 extraction과 analysis, 그리고 추가 피드백을 모두 합쳐서 임베딩
             const contentForEmbedding = `
-            [Document Type]: ${docType}
-            [User Feedback]: ${userFeedback}
-            [Final Content]: ${analysisResult}
+            [Doc Type]: ${docType}
+            [Verified Extraction]: ${extraction}
+            [Verified Analysis]: ${analysis}
+            [User Instruction]: ${userFeedback}
             `;
 
             const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
@@ -132,7 +133,7 @@ export default async function handler(req, res) {
             const vector = embedResult.embedding.values;
 
             const index = pinecone.index("legal-rag-db");
-            const uniqueId = `feedback-${Date.now()}`;
+            const uniqueId = `manual-train-${Date.now()}`;
 
             await index.upsert([{
                 id: uniqueId,
@@ -141,17 +142,17 @@ export default async function handler(req, res) {
                     fileName,
                     docType,
                     type: "verified_instruction",
-                    userFeedback,
-                    fullContent: analysisResult,
+                    userFeedback: userFeedback, // 나중에 "과거 사례"로 검색될 핵심 데이터
+                    fullContent: contentForEmbedding,
                     createdAt: new Date().toISOString()
                 }
             }]);
 
-            return res.status(200).json({ success: true, step: 'save', message: "Saved" });
+            return res.status(200).json({ success: true, step: 'save', upsertId: uniqueId });
         }
 
     } catch (error) {
-        console.error("Error:", error);
+        console.error("Handler Error:", error);
         res.status(500).json({ error: error.message });
     }
 }
