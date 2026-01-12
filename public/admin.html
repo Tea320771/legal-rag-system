@@ -136,12 +136,32 @@
     transform: none;
     box-shadow: none;
 }
+/* [추가] 빨간 점(Red Dot) 애니메이션 스타일 */
+    .red-dot {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 12px;
+        height: 12px;
+        background-color: #ef4444; /* 빨간색 */
+        border-radius: 50%;
+        border: 2px solid white;
+        display: none; /* 기본 숨김 */
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
     </style>
 </head>
 <body>
-<div id="notification-bell" onclick="openPendingModal()" style="position:fixed; top:20px; right:30px; cursor:pointer; z-index:9999;">
+<div id="notification-bell" onclick="handleNotificationClick()" style="position:fixed; top:20px; right:30px; cursor:pointer; z-index:9999;">
     <span style="font-size: 1.8rem;">🔔</span>
-    <span id="notification-badge" style="position:absolute; top:-5px; right:-5px; background:red; color:white; border-radius:50%; padding:2px 6px; font-size:0.75rem; display:none;">0</span>
+    <span id="red-dot" class="red-dot"></span>
 </div>
 
 <div id="pending-modal" class="modal hidden">
@@ -427,27 +447,53 @@ window.addEventListener('DOMContentLoaded', () => {
     setInterval(checkPendingDocs, 30000);
 });
 
-// 1. 대기열 개수 확인 및 배지 업데이트
-async function checkPendingDocs() {
-    // Supabase JS 클라이언트를 쓰거나, 간단히 API를 만들어 호출
-    // 여기서는 편의상 바로 API 호출 예시 (별도 GET API 필요) 또는 직접 조회 로직 구현
-    // *실제 구현 시에는 /api/get-pending-list 같은 API를 하나 더 만드는 게 좋습니다.
-    
-    /* 임시: /api/get-pending API가 있다고 가정 */
-    try {
-        const res = await fetch('/api/get-pending'); // DB에서 status='pending' 조회
-        const data = await res.json();
-        
-        const badge = document.getElementById('notification-badge');
-        if (data.count > 0) {
-            badge.innerText = data.count;
-            badge.style.display = 'block';
-            window.pendingDocs = data.items; // 전역 변수에 저장
-        } else {
-            badge.style.display = 'none';
+// [수정] 1. 대기열 개수 확인 (단순 카운트 모드)
+    async function checkPendingDocs() {
+        try {
+            // mode=count 파라미터로 백엔드에 확인 요청
+            const res = await fetch('/api/check-new-docs?mode=count');
+            const data = await res.json();
+            
+            const dot = document.getElementById('red-dot');
+            
+            // 대기 문서가 1개 이상이면 빨간 점 표시
+            if (data.success && data.count > 0) {
+                dot.style.display = 'block';
+                console.log(`🔔 알림: 대기 문서 ${data.count}건 발견`);
+            } else {
+                dot.style.display = 'none';
+            }
+        } catch (e) { 
+            console.error("알림 확인 실패", e); 
         }
-    } catch (e) { console.error("알림 확인 실패", e); }
-}
+    }
+
+    // [추가] 2. 종 모양 클릭 시 동작 (즉시 처리)
+    async function handleNotificationClick() {
+        const dot = document.getElementById('red-dot');
+        
+        // 빨간 점이 떠있을 때만 동작
+        if (dot.style.display !== 'none') {
+            if (confirm("대기 중인 문서가 있습니다. AI 분석을 시작하시겠습니까?")) {
+                alert("분석을 시작합니다. (백그라운드 처리)");
+                
+                try {
+                    // POST 요청으로 실제 처리 시작
+                    const res = await fetch('/api/check-new-docs', { method: 'POST' });
+                    const result = await res.json();
+                    
+                    alert(`완료! ${result.processed ? result.processed.length : 0}건이 처리되었습니다.`);
+                    
+                    // 처리 후 점 끄기 위해 재확인
+                    checkPendingDocs();
+                } catch (e) {
+                    alert("처리 중 오류 발생: " + e.message);
+                }
+            }
+        } else {
+            alert("현재 처리할 새로운 문서가 없습니다.");
+        }
+    }
 
 // 2. 모달 열기 및 리스트 렌더링
 function openPendingModal() {
