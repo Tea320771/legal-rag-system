@@ -156,6 +156,64 @@
         70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
     }
+/* --- [추가] 아코디언 리스트 스타일 --- */
+    .pending-item {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        overflow: hidden;
+        background: white;
+        transition: all 0.2s;
+    }
+    
+    .pending-header {
+        padding: 15px;
+        background: #f8fafc;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+        color: #334155;
+    }
+    
+    .pending-header:hover {
+        background: #f1f5f9;
+        color: #2563eb;
+    }
+
+    .pending-content {
+        display: none; /* 기본 숨김 */
+        padding: 20px;
+        border-top: 1px solid #e2e8f0;
+        background: #fff;
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+
+    /* 활성화 상태 */
+    .pending-item.active .pending-content {
+        display: block;
+        animation: slideDown 0.3s ease-out;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 로딩 스피너 */
+    .spinner {
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-right: 10px;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -165,31 +223,14 @@
 </div>
 
 <div id="pending-modal" class="modal hidden">
-    <div class="modal-content" style="max-width: 600px; border-radius: 16px;">
-        <div class="modal-header" style="border-bottom: 1px solid #f3f4f6; padding-bottom: 15px; margin-bottom: 15px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span style="font-size:1.5rem;">⏳</span>
-                <div>
-                    <h3 style="margin:0; color:#1f2937; font-size:1.2rem;">승인 대기 중인 문서</h3>
-                    <span style="font-size:0.85rem; color:#6b7280;">AI가 분석을 마치고 검토를 기다리고 있습니다.</span>
-                </div>
-            </div>
-            <button onclick="document.getElementById('pending-modal').classList.add('hidden')" class="close-modal-btn">
-                &times;
-            </button>
+    <div class="modal-content" style="max-width: 700px; border-radius: 16px;">
+        <div class="modal-header">
+            <h3 style="margin:0;">⏳ 승인 대기 목록</h3>
+            <button onclick="document.getElementById('pending-modal').classList.add('hidden')" class="close-modal-btn">&times;</button>
         </div>
-
         <div class="modal-body">
-            <div id="pending-list" style="max-height: 350px; overflow-y: auto; padding-right: 5px;">
-                <div style="text-align:center; padding:30px; color:#9ca3af;">
-                    로딩 중...
+            <div id="pending-list-container" style="max-height: 500px; overflow-y: auto; padding: 5px;">
                 </div>
-            </div>
-
-            <button class="btn-scan" onclick="checkNewFilesManual()">
-                <span>🔄</span>
-                <span>지금 새 문서 확인하기 (Scan Storage)</span>
-            </button>
         </div>
     </div>
 </div>
@@ -447,16 +488,23 @@ window.addEventListener('DOMContentLoaded', () => {
     setInterval(checkPendingDocs, 30000);
 });
 
-// [수정] 1. 대기열 개수 확인 (단순 카운트 모드)
+// =========================================================
+    // [통합] 알림 및 대기열 관리 로직 (Red Dot & Accordion)
+    // =========================================================
+
+    // 1. 페이지 로드 시 & 주기적으로 대기열 확인
+    window.addEventListener('DOMContentLoaded', () => {
+        checkPendingDocs();
+        setInterval(checkPendingDocs, 30000); // 30초마다 갱신
+    });
+
+    // [Red Dot] 대기 문서 개수 확인 (단순 카운트)
     async function checkPendingDocs() {
         try {
-            // mode=count 파라미터로 백엔드에 확인 요청
             const res = await fetch('/api/check-new-docs?mode=count');
             const data = await res.json();
             
             const dot = document.getElementById('red-dot');
-            
-            // 대기 문서가 1개 이상이면 빨간 점 표시
             if (data.success && data.count > 0) {
                 dot.style.display = 'block';
                 console.log(`🔔 알림: 대기 문서 ${data.count}건 발견`);
@@ -468,94 +516,144 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // [추가] 2. 종 모양 클릭 시 동작 (즉시 처리)
+    // [Modal Open] 종 모양 클릭 -> 리스트 조회 및 모달 열기
     async function handleNotificationClick() {
-        const dot = document.getElementById('red-dot');
+        const modal = document.getElementById('pending-modal');
+        const container = document.getElementById('pending-list-container');
         
-        // 빨간 점이 떠있을 때만 동작
-        if (dot.style.display !== 'none') {
-            if (confirm("대기 중인 문서가 있습니다. AI 분석을 시작하시겠습니까?")) {
-                alert("분석을 시작합니다. (백그라운드 처리)");
-                
-                try {
-                    // POST 요청으로 실제 처리 시작
-                    const res = await fetch('/api/check-new-docs', { method: 'POST' });
-                    const result = await res.json();
-                    
-                    alert(`완료! ${result.processed ? result.processed.length : 0}건이 처리되었습니다.`);
-                    
-                    // 처리 후 점 끄기 위해 재확인
-                    checkPendingDocs();
-                } catch (e) {
-                    alert("처리 중 오류 발생: " + e.message);
-                }
+        modal.classList.remove('hidden');
+        container.innerHTML = '<div style="text-align:center; padding:20px;">목록을 불러오는 중...</div>';
+
+        try {
+            // mode=list 호출
+            const res = await fetch('/api/check-new-docs?mode=list');
+            const data = await res.json();
+
+            if (!data.success || !data.list || data.list.length === 0) {
+                container.innerHTML = '<div style="text-align:center; padding:20px;">처리할 대기 문서가 없습니다.</div>';
+                document.getElementById('red-dot').style.display = 'none'; // 점 끄기
+                return;
             }
-        } else {
-            alert("현재 처리할 새로운 문서가 없습니다.");
+
+            // 리스트 렌더링
+            container.innerHTML = '';
+            data.list.forEach(doc => {
+                const date = new Date(doc.created_at).toLocaleString();
+                // 이미 status가 error인 경우 표시
+                const errorBadge = doc.status === 'error' ? '<span style="color:red; font-size:0.8em;">(오류 재시도)</span> ' : '';
+
+                const item = document.createElement('div');
+                item.className = 'pending-item';
+                item.id = `doc-${doc.id}`;
+                
+                // 헤더 클릭 시 toggleAccordion 호출
+                item.innerHTML = `
+                    <div class="pending-header" onclick="toggleAccordion('${doc.id}', '${doc.filename}')">
+                        <span>📄 ${errorBadge}${doc.filename}</span>
+                        <span style="font-size:0.8em; color:#94a3b8;">${date} ▼</span>
+                    </div>
+                    <div class="pending-content" id="content-${doc.id}">
+                        <div style="text-align:center; color:#64748b; padding:20px;">
+                            <div class="spinner"></div><br>AI가 문서를 분석 중입니다...<br>(약 10~20초 소요)
+                        </div>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+
+        } catch (e) {
+            container.innerHTML = `<div style="color:red; text-align:center;">목록 로드 실패: ${e.message}</div>`;
         }
     }
 
-// 2. 모달 열기 및 리스트 렌더링
-function openPendingModal() {
-    const modal = document.getElementById('pending-modal');
-    const list = document.getElementById('pending-list');
-    modal.classList.remove('hidden');
-    
-    if (!window.pendingDocs || window.pendingDocs.length === 0) {
-        list.innerHTML = "<p>대기 중인 문서가 없습니다.</p>";
-        return;
+    // [Accordion] 토글 및 개별 분석 요청
+    async function toggleAccordion(docId, filename) {
+        const item = document.getElementById(`doc-${docId}`);
+        const contentDiv = document.getElementById(`content-${docId}`);
+        
+        // 이미 열려있으면 닫기 (토글)
+        if (item.classList.contains('active')) {
+            item.classList.remove('active');
+            return;
+        }
+
+        // 다른 열린 항목들 닫기 (하나만 열리게 하기 위함)
+        document.querySelectorAll('.pending-item').forEach(el => el.classList.remove('active'));
+        
+        // 현재 항목 열기
+        item.classList.add('active');
+
+        // 이미 분석된 내용이 있으면 다시 요청하지 않음 (dataset 플래그 활용)
+        if (item.dataset.analyzed === "true") return;
+
+        // [핵심] 개별 분석 요청 (docId 포함 POST)
+        try {
+            const res = await fetch('/api/check-new-docs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ docId: docId }) // 특정 문서 ID 전송
+            });
+            
+            const result = await res.json();
+            
+            if (result.success && result.processed && result.processed.length > 0) {
+                const data = result.processed[0];
+                
+                if (data.status === 'error') {
+                     contentDiv.innerHTML = `<div style="color:red; padding:10px;">❌ 분석 실패: ${data.error}</div>`;
+                } else {
+                    // 분석 성공 결과 표시
+                    const aiResult = data.result; 
+                    
+                    // 이슈 리스트 생성
+                    const issuesHtml = aiResult.issues 
+                        ? aiResult.issues.map(i => `<li>${i}</li>`).join('') 
+                        : '<li>특이사항 없음</li>';
+
+                    contentDiv.innerHTML = `
+                        <div style="background:#f0f9ff; padding:15px; border-radius:8px; margin-bottom:10px; border:1px solid #bae6fd;">
+                            <strong style="color:#0369a1;">📌 핵심 쟁점</strong>
+                            <ul style="margin:5px 0 0 20px; color:#334155;">${issuesHtml}</ul>
+                        </div>
+                        <div style="background:#f5f3ff; padding:15px; border-radius:8px; border:1px solid #ddd6fe;">
+                            <strong style="color:#7c3aed;">🔮 RAG 분석 결과</strong>
+                            <p style="margin:8px 0 0 0; white-space:pre-wrap; color:#4b5563; font-size:0.95rem;">${aiResult.step3_rag_analysis || aiResult.step3 || "결과 내용 없음"}</p>
+                        </div>
+                        <button onclick="approveDoc('${docId}')" style="width:100%; margin-top:15px; padding:12px; background:#22c55e; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:1rem;">
+                            ✅ 검토 완료 (목록에서 제거)
+                        </button>
+                    `;
+                    item.dataset.analyzed = "true"; // 분석 완료 플래그 설정
+                    
+                    // 하나 처리했으므로 빨간 점 상태 갱신
+                    checkPendingDocs();
+                }
+            } else {
+                contentDiv.innerHTML = "<div style='padding:10px;'>분석 결과가 비어있습니다.</div>";
+            }
+
+        } catch (e) {
+            contentDiv.innerHTML = `<div style="color:red; padding:10px;">통신 오류: ${e.message}</div>`;
+        }
     }
 
-    list.innerHTML = "";
-    window.pendingDocs.forEach((doc, idx) => {
-        const item = document.createElement('div');
-        item.style.cssText = "border:1px solid #e5e7eb; padding:15px; margin-bottom:10px; border-radius:8px; background:#f9fafb;";
+    // [Approve] 검토 완료 처리 (화면에서 제거)
+    function approveDoc(docId) {
+        const item = document.getElementById(`doc-${docId}`);
         
-        item.innerHTML = `
-            <div style="font-weight:bold; margin-bottom:5px;">📄 ${doc.filename}</div>
-            <div style="font-size:0.85rem; color:#666; margin-bottom:10px;">${new Date(doc.created_at).toLocaleString()} 업로드됨</div>
-            <div style="display:flex; gap:10px;">
-                <button onclick="reviewPendingItem(${idx})" class="btn-start" style="padding:5px 10px; font-size:0.85rem;">검토 및 승인</button>
-            </div>
-        `;
-        list.appendChild(item);
-    });
-}
-
-// 3. 검토 화면으로 이동 (데이터 채우기)
-function reviewPendingItem(idx) {
-    const doc = window.pendingDocs[idx];
-    document.getElementById('pending-modal').classList.add('hidden');
-
-    // 기존 extractionDisplay 영역에 데이터 채우기
-    document.getElementById('file-info').style.display = 'block';
-    document.getElementById('file-info').innerText = `[검토 중] ${doc.filename} (ID: ${doc.id})`;
-    
-    // AI 결과 채우기
-    const aiData = doc.ai_result;
-    document.getElementById('extractionDisplay').style.display = 'block';
-    document.getElementById('extractionText').innerText = JSON.stringify(aiData.extraction || aiData.extracted_facts, null, 2);
-    
-    document.getElementById('logicDisplay').style.display = 'block';
-    document.getElementById('logicText').innerText = JSON.stringify(aiData.analysis || aiData.logic_analysis, null, 2);
-
-    // 저장 버튼 활성화 (저장 시 DB status도 업데이트해야 함)
-    // *Tip: saveKnowledge 함수를 수정하여 doc.id를 같이 보내야 함
-    window.currentPendingDocId = doc.id; 
-    
-    document.getElementById('analyzeBtn').style.display = 'none';
-    document.getElementById('saveBtn').style.display = 'block';
-}
-
-// 4. 수동 스캔 트리거
-async function checkNewFilesManual() {
-    const btn = event.target;
-    btn.disabled = true; btn.innerText = "스캔 중...";
-    await fetch('/api/check-new-docs', { method: 'POST' });
-    await checkPendingDocs();
-    openPendingModal(); // 목록 갱신
-    btn.disabled = false; btn.innerText = "🔄 지금 새 문서 확인하기";
-}
+        // 부드럽게 사라지는 효과
+        item.style.transition = "opacity 0.3s, transform 0.3s";
+        item.style.opacity = '0';
+        item.style.transform = "translateX(20px)";
+        
+        setTimeout(() => {
+            item.remove();
+            // 목록이 비었으면 모달 닫기
+            if (document.querySelectorAll('.pending-item').length === 0) {
+                document.getElementById('pending-modal').classList.add('hidden');
+            }
+        }, 300);
+    }
 </script>
 </body>
 </html>

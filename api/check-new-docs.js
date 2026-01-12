@@ -68,8 +68,7 @@ export default async function handler(req, res) {
     }
 
     try {
-        // [추가 기능 1] 단순 조회 모드 (프론트엔드 알림용)
-        // 무거운 AI 분석 없이 숫자만 빠르게 리턴합니다.
+        // [기존 기능] 단순 조회 모드 (프론트엔드 알림용)
         if (req.query.mode === 'count') {
             const { count, error } = await supabase
                 .from('document_queue')
@@ -80,24 +79,43 @@ export default async function handler(req, res) {
             return res.status(200).json({ success: true, count: count || 0 });
         }
 
+        // [신규 기능 1] 리스트 조회 모드 (모달 목록 출력용)
+        // 파일명과 날짜만 가볍게 가져옵니다.
+        if (req.query.mode === 'list') {
+            const { data, error } = await supabase
+                .from('document_queue')
+                .select('id, filename, status, created_at')
+                .in('status', ['pending', 'error'])
+                .order('created_at', { ascending: true });
+            
+            if (error) throw error;
+            return res.status(200).json({ success: true, list: data });
+        }
+
         // =========================================================
-        // [기존 기능] RAG 파이프라인 분석 시작
+        // [RAG 파이프라인] 문서 분석 처리 (전체 또는 개별)
         // =========================================================
         console.log("🚀 [RAG Pipeline] 문서 처리 시작...");
 
-        // [추가 기능 2] 'error' 상태도 재시도 대상에 포함
-        const { data: pendingDocs, error: dbError } = await supabase
-            .from('document_queue')
-            .select('*')
-            .in('status', ['pending', 'error']) // <-- error 상태도 다시 가져옴
-            .order('created_at', { ascending: true })
-            .limit(3);
+        // [신규 기능 2] 특정 문서 ID가 지정되었는지 확인 (아코디언 클릭 시)
+        let query = supabase.from('document_queue').select('*').in('status', ['pending', 'error']);
+
+        if (req.body.docId) {
+            // 특정 문서 하나만 콕 집어서 처리
+            console.log(`🎯 개별 처리 요청: ID ${req.body.docId}`);
+            query = query.eq('id', req.body.docId);
+        } else {
+            // 지정된 게 없으면 기존처럼 오래된 순서대로 3개 처리
+            query = query.order('created_at', { ascending: true }).limit(3);
+        }
+
+        const { data: pendingDocs, error: dbError } = await query;
 
         if (dbError) throw new Error(`DB 조회 실패: ${dbError.message}`);
 
         if (!pendingDocs || pendingDocs.length === 0) {
             console.log("✅ 처리할 문서가 없습니다.");
-            return res.status(200).json({ success: true, count: 0 });
+            return res.status(200).json({ success: true, count: 0, processed: [] });
         }
 
         console.log(`⚡ ${pendingDocs.length}개의 문서를 RAG 분석합니다.`);
@@ -118,7 +136,6 @@ export default async function handler(req, res) {
 
                 if (downloadError) {
                     console.error(`❌ 다운로드 실패: ${doc.filename}`);
-                    // 파일 자체가 없으면 계속 시도하지 않도록 로그만 남기고 스킵 (필요시 별도 상태 처리)
                     continue; 
                 }
 
@@ -201,14 +218,18 @@ export default async function handler(req, res) {
 
                 if (updateError) throw updateError;
                 console.log(`✅ 처리 완료: ${doc.filename}`);
-                results.push({ filename: doc.filename, status: 'processed' });
+                results.push({ filename: doc.filename, status: 'processed', result: finalResult });
 
             } catch (docError) {
                 console.error(`💥 에러 발생 (${doc.filename}):`, docError.message);
-                // 실패 시 status를 'error'로 업데이트하여 나중에 재시도 대상이 됨
+                
+                // 에러 상태 DB 저장
                 await supabase.from('document_queue')
                     .update({ status: 'error', ai_result: { error: docError.message } })
                     .eq('id', doc.id);
+                    
+                // 프론트엔드에 에러 내용 전달을 위해 결과 배열에 포함
+                results.push({ filename: doc.filename, status: 'error', error: docError.message });
             }
         }
 
