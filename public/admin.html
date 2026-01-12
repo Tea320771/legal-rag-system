@@ -79,6 +79,63 @@
             margin: 0;
             color: #1f2937;
         }
+/* --- [수정] 모달 디자인 개선 (X버튼 & 스캔버튼) --- */
+
+/* 1. X 닫기 버튼 스타일 */
+.close-modal-btn {
+    background: none;
+    border: none;
+    color: #9ca3af; /* 연한 회색 (기본) */
+    font-size: 1.8rem;
+    cursor: pointer;
+    padding: 0 8px;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    line-height: 1;
+}
+
+.close-modal-btn:hover {
+    color: #ef4444; /* 마우스 올리면 빨간색 */
+    background-color: #f3f4f6; /* 배경은 아주 연한 회색 */
+    transform: scale(1.1); /* 살짝 커짐 */
+}
+
+/* 2. 스캔 버튼 스타일 (Scan Storage) */
+.btn-scan {
+    width: 100%;
+    margin-top: 20px;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); /* 보라빛 그라디언트 */
+    color: white;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.3); /* 그림자 */
+    transition: all 0.2s ease;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-scan:hover {
+    background: linear-gradient(135deg, #4338ca 0%, #312e81 100%);
+    transform: translateY(-2px); /* 살짝 떠오르는 효과 */
+    box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.4);
+}
+
+.btn-scan:active {
+    transform: translateY(0);
+}
+
+.btn-scan:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
     </style>
 </head>
 <body>
@@ -88,16 +145,31 @@
 </div>
 
 <div id="pending-modal" class="modal hidden">
-    <div class="modal-content" style="max-width: 800px;">
-        <div class="modal-header">
-            <h3>⏳ 승인 대기 중인 문서 (Pending Review)</h3>
-            <button onclick="document.getElementById('pending-modal').classList.add('hidden')" style="background:none; border:none; color:white; font-size:1.5rem;">✕</button>
-        </div>
-        <div class="modal-body">
-            <div id="pending-list" style="max-height: 400px; overflow-y: auto;">
-                <p>로딩 중...</p>
+    <div class="modal-content" style="max-width: 600px; border-radius: 16px;">
+        <div class="modal-header" style="border-bottom: 1px solid #f3f4f6; padding-bottom: 15px; margin-bottom: 15px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:1.5rem;">⏳</span>
+                <div>
+                    <h3 style="margin:0; color:#1f2937; font-size:1.2rem;">승인 대기 중인 문서</h3>
+                    <span style="font-size:0.85rem; color:#6b7280;">AI가 분석을 마치고 검토를 기다리고 있습니다.</span>
+                </div>
             </div>
-            <button class="btn-start" onclick="checkNewFilesManual()" style="margin-top:15px; background:#4b5563;">🔄 지금 새 문서 확인하기 (Scan Storage)</button>
+            <button onclick="document.getElementById('pending-modal').classList.add('hidden')" class="close-modal-btn">
+                &times;
+            </button>
+        </div>
+
+        <div class="modal-body">
+            <div id="pending-list" style="max-height: 350px; overflow-y: auto; padding-right: 5px;">
+                <div style="text-align:center; padding:30px; color:#9ca3af;">
+                    로딩 중...
+                </div>
+            </div>
+
+            <button class="btn-scan" onclick="checkNewFilesManual()">
+                <span>🔄</span>
+                <span>지금 새 문서 확인하기 (Scan Storage)</span>
+            </button>
         </div>
     </div>
 </div>
