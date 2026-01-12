@@ -6,6 +6,12 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@pinecone-database/pinecone": "^2.0.0"
-  }
+    "@pinecone-database/pinecone": "^2.0.0",
+    "@supabase/supabase-js": "^2.90.1"
+  },
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
 }
