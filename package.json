@@ -5,7 +5,7 @@
     "start": "vercel dev"
   },
   "dependencies": {
-    "@pinecone-database/pinecone": "^2.0.0",
-    "@google/generative-ai": "^0.1.0"
+    "@google/generative-ai": "^0.24.1",
+    "@pinecone-database/pinecone": "^2.0.0"
   }
 }

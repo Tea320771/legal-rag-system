@@ -5,37 +5,68 @@
     <title>AI 법률 문서 학습 트레이너 (RAG)</title>
     <style>
         body { font-family: 'Pretendard', sans-serif; padding: 40px; background: #f3f4f6; color: #1f2937; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
         h1 { margin-top: 0; color: #111827; font-size: 1.5rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 15px; }
         
         .section { margin-bottom: 30px; }
-        .label { display: block; font-weight: bold; margin-bottom: 8px; color: #374151; }
+        .label { display: block; font-weight: bold; margin-bottom: 8px; color: #374151; font-size: 1.1rem; }
         .sub-label { display: block; font-size: 0.9rem; color: #6b7280; margin-bottom: 8px; }
         
         /* 파일 업로드 영역 */
         .drop-zone { border: 2px dashed #cbd5e1; padding: 30px; text-align: center; cursor: pointer; border-radius: 8px; transition: 0.2s; background: #f9fafb; }
         .drop-zone:hover, .drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
         
+        /* AI 결과 박스 */
+        .ai-result-box {
+            background-color: #f0f9ff;
+            border-left: 5px solid #0ea5e9;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            display: none; /* 초기엔 숨김 */
+        }
+        .ai-title { font-weight: bold; color: #0284c7; margin-bottom: 5px; display: block; }
+        .ai-content { white-space: pre-wrap; font-size: 0.95rem; color: #334155; }
+
         /* 입력 필드 */
-        textarea { width: 100%; height: 100px; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; resize: vertical; margin-bottom: 5px; }
+        select { padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 10px; font-size: 1rem; }
+        textarea { width: 100%; height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; resize: vertical; margin-bottom: 5px; font-family: monospace;}
         textarea:focus { outline: none; border-color: #2563eb; ring: 2px solid #bfdbfe; }
 
-        .btn { background: #2563eb; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; width: 100%; font-weight: bold; transition: background 0.2s; }
-        .btn:hover { background: #1d4ed8; }
+        /* 버튼 그룹 */
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        .btn { flex: 1; padding: 15px; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; font-weight: bold; transition: background 0.2s; color: white; }
+        
+        #analyzeBtn { background: #4f46e5; } /* 보라색 */
+        #analyzeBtn:hover { background: #4338ca; }
+        
+        #saveBtn { background: #059669; display: none; } /* 초록색 */
+        #saveBtn:hover { background: #047857; }
+
         .btn:disabled { background: #94a3b8; cursor: not-allowed; }
 
         #status-log { margin-top: 20px; padding: 15px; background: #1e293b; color: #4ade80; font-family: monospace; border-radius: 6px; height: 150px; overflow-y: auto; display: none; font-size: 0.9rem; }
-        .log-error { color: #f87171; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>👨‍🏫 AI 법률 문서 트레이너 (RAG)</h1>
-    <p style="color:#4b5563; margin-bottom:30px;">AI가 헷갈려하는 문서를 업로드하고, <b>읽는 방법</b>과 <b>해석하는 방법</b>을 가르쳐주세요.</p>
+    <h1>👨‍🏫 AI 법률 문서 트레이너 (Interactive RAG)</h1>
+    <p style="color:#4b5563; margin-bottom:30px;">문서를 분석하고, AI의 해석 결과를 <b>교정(Feedback)</b>하여 학습시킵니다.</p>
+
+    <div style="margin-bottom: 20px;">
+        <span class="label">문서 종류 선택</span>
+        <select id="docType">
+            <option value="default">일반 문서</option>
+            <option value="judgment">판결문</option>
+            <option value="contract">계약서</option>
+            <option value="receipt">영수증/청구서</option>
+            <option value="registry">등기부등본</option>
+        </select>
+    </div>
 
     <div class="section">
-        <span class="label">Step 1. 학습할 문서 업로드 (판결문, 영수증 등)</span>
+        <span class="label">Step 1. 학습할 문서 업로드</span>
         <div class="drop-zone" id="dropZone">
             <p>📄 클릭하여 파일을 선택하거나 이곳으로 드래그하세요.</p>
             <input type="file" id="fileInput" style="display: none;" accept=".pdf, .png, .jpg, .jpeg">
@@ -45,17 +76,32 @@
 
     <div class="section">
         <span class="label">Step 2. 🔍 읽는 방법 교육 (Extraction Strategy)</span>
-        <span class="sub-label">문서에서 텍스트가 깨지거나 특이한 구조일 때, 어떻게 읽어야 하는지 알려주세요.</span>
-        <textarea id="readingStrategy" placeholder="예: '주문' 텍스트가 두 줄로 나뉘어 있어도 이어서 읽어. 날짜 뒤에 점(.)이 없어도 날짜로 인식해."></textarea>
+        
+        <div id="extractionDisplay" class="ai-result-box">
+            <span class="ai-title">🤖 AI Extraction 결과 (GitHub 규칙 적용됨)</span>
+            <div id="extractionText" class="ai-content"></div>
+        </div>
+
+        <span class="sub-label">위 AI 결과가 부족하다면, 아래에 올바른 내용이나 읽는 규칙을 수정해주세요.</span>
+        <textarea id="readingStrategy" placeholder="AI가 텍스트를 잘못 읽었다면 여기서 수정하거나 규칙을 적어주세요."></textarea>
     </div>
 
     <div class="section">
         <span class="label">Step 3. 🧠 해석 방법 교육 (Logic Rule)</span>
-        <span class="sub-label">추출된 내용을 바탕으로 비율 계산이나 비용 처리를 어떻게 할지 논리를 알려주세요.</span>
-        <textarea id="logicRule" placeholder="예: '각자 부담'이라는 단어가 나오면 상환 비율을 0%로 설정해. 피고 이름 뒤에 '(주)'가 있으면 법인으로 처리해."></textarea>
+
+        <div id="logicDisplay" class="ai-result-box" style="border-left-color: #8b5cf6; background-color: #f5f3ff;">
+            <span class="ai-title" style="color: #7c3aed;">🤖 AI Logic 분석 결과 (GitHub 규칙 적용됨)</span>
+            <div id="logicText" class="ai-content"></div>
+        </div>
+
+        <span class="sub-label">AI의 해석 논리가 틀렸다면, 아래에 올바른 해석 방법을 적어주세요.</span>
+        <textarea id="logicRule" placeholder="법적 해석이나 계산 논리가 틀렸다면 여기서 교정해주세요."></textarea>
     </div>
 
-    <button id="trainBtn" class="btn" onclick="startTraining()">RAG 데이터베이스에 지식 저장하기</button>
+    <div class="btn-group">
+        <button id="analyzeBtn" class="btn" onclick="analyzeDocument()">Step 1. 문서 분석 실행 (Extraction & Logic)</button>
+        <button id="saveBtn" class="btn" onclick="saveKnowledge()">Step 2. 교정 내용 저장 (Train DB)</button>
+    </div>
 
     <div id="status-log"></div>
 </div>
@@ -66,7 +112,16 @@
     const fileInput = document.getElementById('fileInput');
     const logDiv = document.getElementById('status-log');
 
-    // 파일 드래그앤드롭 UI 로직
+    // UI Elements
+    const extractionDisplay = document.getElementById('extractionDisplay');
+    const extractionText = document.getElementById('extractionText');
+    const logicDisplay = document.getElementById('logicDisplay');
+    const logicText = document.getElementById('logicText');
+    
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const saveBtn = document.getElementById('saveBtn');
+
+    // Drag & Drop
     dropZone.onclick = () => fileInput.click();
     dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover'); };
     dropZone.ondragleave = () => dropZone.classList.remove('dragover');
@@ -80,9 +135,20 @@
     function handleFile(file) {
         if (!file) return;
         selectedFile = file;
-        const info = document.getElementById('file-info');
-        info.style.display = 'block';
-        info.innerText = `선택된 파일: ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+        document.getElementById('file-info').style.display = 'block';
+        document.getElementById('file-info').innerText = `선택된 파일: ${file.name}`;
+        
+        // 파일 변경 시 UI 리셋
+        resetUI();
+    }
+
+    function resetUI() {
+        extractionDisplay.style.display = 'none';
+        logicDisplay.style.display = 'none';
+        saveBtn.style.display = 'none';
+        analyzeBtn.style.display = 'block';
+        analyzeBtn.disabled = false;
+        logDiv.style.display = 'none';
     }
 
     function log(msg, type='info') {
@@ -101,56 +167,111 @@
         });
     }
 
-    async function startTraining() {
-        const readingStrategy = document.getElementById('readingStrategy').value.trim();
-        const logicRule = document.getElementById('logicRule').value.trim();
-
-        if (!selectedFile) { alert("문서 파일을 먼저 업로드해주세요."); return; }
-        if (!readingStrategy && !logicRule) { alert("읽는 방법 또는 해석 방법 중 하나는 입력해야 합니다."); return; }
-
-        const btn = document.getElementById('trainBtn');
-        btn.disabled = true;
-        btn.innerText = "학습 중...";
-        logDiv.innerHTML = ""; // 로그 초기화
-
+    // [Step 1] 분석 요청 함수
+    async function analyzeDocument() {
+        if (!selectedFile) { alert("파일을 먼저 업로드해주세요."); return; }
+        
+        analyzeBtn.disabled = true;
+        analyzeBtn.innerText = "GitHub 규칙 및 과거 사례 참조하여 분석 중...";
+        logDiv.innerHTML = "";
+        
         try {
-            log("1. 파일 데이터를 읽는 중...");
             const base64 = await fileToBase64(selectedFile);
+            const docType = document.getElementById('docType').value;
 
-            log("2. 서버로 데이터 전송 및 학습 요청...");
+            log("🚀 GitHub 규칙 및 RAG 데이터 검색 중...");
             
-            // API 호출
             const response = await fetch('/api/rag-train', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    step: 'analyze', // 분석 모드
                     fileBase64: base64,
                     mimeType: selectedFile.type,
                     fileName: selectedFile.name,
-                    readingStrategy: readingStrategy, // 사용자의 읽기 비법
-                    logicRule: logicRule              // 사용자의 해석 비법
+                    docType: docType
                 })
             });
 
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.error || "서버 오류");
-            }
+            const result = await response.json();
+            
+            if (!result.success) throw new Error(result.error);
+
+            // 결과 화면 표시
+            extractionDisplay.style.display = 'block';
+            extractionText.innerText = result.data.extraction;
+            
+            logicDisplay.style.display = 'block';
+            logicText.innerText = result.data.analysis;
+
+            // 사용자 편의를 위해 수정할 수 있도록 textarea에도 기본값 채워주기 (선택사항)
+            // document.getElementById('readingStrategy').value = result.data.extraction;
+            // document.getElementById('logicRule').value = result.data.analysis;
+
+            log("✅ 분석 완료! 결과를 확인하고 수정해주세요.");
+            
+            // 버튼 전환
+            analyzeBtn.style.display = 'none';
+            saveBtn.style.display = 'block';
+
+        } catch (e) {
+            log(`❌ 분석 에러: ${e.message}`, 'error');
+            analyzeBtn.disabled = false;
+            analyzeBtn.innerText = "Step 1. 문서 분석 실행";
+        }
+    }
+
+    // [Step 2] 최종 저장 함수
+    async function saveKnowledge() {
+        saveBtn.disabled = true;
+        saveBtn.innerText = "저장 중...";
+
+        try {
+            const readingStrategy = document.getElementById('readingStrategy').value;
+            const logicRule = document.getElementById('logicRule').value;
+            const extractionVal = document.getElementById('extractionText').innerText;
+            const analysisVal = document.getElementById('logicText').innerText;
+            const docType = document.getElementById('docType').value;
+
+            // 피드백이 없다면 기본 AI 결과라도 저장하도록 처리
+            const finalFeedback = `
+            [Reading Instruction]: ${readingStrategy || "AI 추출 결과 승인"}
+            [Logic Instruction]: ${logicRule || "AI 분석 결과 승인"}
+            `;
+
+            log("💾 Pinecone DB에 검증된 데이터 저장 중...");
+
+            const response = await fetch('/api/rag-train', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    step: 'save', // 저장 모드
+                    docType: docType,
+                    fileName: selectedFile.name,
+                    extraction: extractionVal, // 원본(혹은 수정된) 추출값
+                    analysis: analysisVal,     // 원본(혹은 수정된) 분석값
+                    userFeedback: finalFeedback // 사용자가 입력한 교정 내용
+                })
+            });
 
             const result = await response.json();
-            log(`✅ 학습 완료! Pinecone에 저장되었습니다. (ID: ${result.upsertId})`);
-            alert("학습이 완료되었습니다! 이제 AI가 이 규칙을 참고합니다.");
+            if(!result.success) throw new Error(result.error);
+
+            log(`🎉 저장 완료! (ID: ${result.upsertId})`);
+            alert("학습이 완료되었습니다.");
             
-            // 입력창 초기화
+            // 초기화
+            resetUI();
+            selectedFile = null;
+            document.getElementById('fileInput').value = "";
+            document.getElementById('file-info').style.display = 'none';
             document.getElementById('readingStrategy').value = "";
             document.getElementById('logicRule').value = "";
 
         } catch (e) {
-            log(`❌ 학습 실패: ${e.message}`, 'error');
-            console.error(e);
-        } finally {
-            btn.disabled = false;
-            btn.innerText = "RAG 데이터베이스에 지식 저장하기";
+            log(`❌ 저장 실패: ${e.message}`, 'error');
+            saveBtn.disabled = false;
+            saveBtn.innerText = "Step 2. 교정 내용 저장";
         }
     }
 </script>
