@@ -224,7 +224,6 @@ export default async function handler(req, res) {
                     .update({ 
                         status: 'processed', 
                         ai_result: finalResult,
-                        updated_at: new Date().toISOString()
                     })
                     .eq('id', doc.id);
 
