@@ -1,7 +1,7 @@
 // /api/check-new-docs.js
-require { createClient } from '@supabase/supabase-js';
-require { GoogleGenerativeAI } from '@google/generative-ai';
-require { Pinecone } from '@pinecone-database/pinecone';
+const { createClient } = require('@supabase/supabase-js');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { Pinecone } = require('@pinecone-database/pinecone');
 
 // [추가 1] 강제 지연을 위한 헬퍼 함수
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
