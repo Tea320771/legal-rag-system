@@ -214,9 +214,38 @@
         margin-right: 10px;
     }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+/* --- [NEW] RAG DB 관리용 스타일 --- */
+    #btn-rag-db {
+        position: fixed; top: 20px; left: 30px; 
+        background: #1e293b; color: white; padding: 10px 16px; border-radius: 25px; 
+        font-weight: bold; cursor: pointer; z-index: 999; border: 1px solid #334155;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.2s;
+    }
+    #btn-rag-db:hover { background: #334155; transform: translateY(-2px); }
+
+    .rag-container { display: flex; gap: 20px; height: 500px; }
+    .rag-list { flex: 1; border-right: 1px solid #e5e7eb; overflow-y: auto; padding-right: 10px; }
+    .rag-detail { flex: 2; padding-left: 10px; display: flex; flex-direction: column; }
+    
+    .rag-item { padding: 12px; border-bottom: 1px solid #f1f5f9; cursor: pointer; transition: background 0.2s; border-radius: 6px; }
+    .rag-item:hover { background: #f8fafc; }
+    .rag-item.active { background: #eff6ff; border: 1px solid #bfdbfe; }
+    .rag-item-title { font-weight: bold; font-size: 0.95rem; color: #334155; margin-bottom: 4px; display: block; }
+    .rag-item-date { font-size: 0.8rem; color: #94a3b8; }
+
+    .rag-input-group { margin-bottom: 15px; }
+    .rag-input-label { font-size: 0.85rem; font-weight: bold; color: #64748b; margin-bottom: 5px; display: block; }
+    .rag-input { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-family: monospace; font-size: 0.9rem; }
+    
+    .rag-actions { margin-top: auto; display: flex; gap: 10px; justify-content: flex-end; }
+    .btn-delete { background: #ef4444; color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; }
+    .btn-update { background: #3b82f6; color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; }
+    .btn-delete:hover { background: #dc2626; }
+    .btn-update:hover { background: #2563eb; }
     </style>
 </head>
 <body>
+<button id="btn-rag-db" onclick="openRagDbModal()">🗄️ Access RAG DB</button>
 <div id="notification-bell" onclick="handleNotificationClick()" style="position:fixed; top:20px; right:30px; cursor:pointer; z-index:9999;">
     <span style="font-size: 1.8rem;">🔔</span>
     <span id="red-dot" class="red-dot"></span>
@@ -228,6 +257,45 @@
             <h3 style="margin:0;">⏳ 승인 대기 목록</h3>
             <button onclick="document.getElementById('pending-modal').classList.add('hidden')" class="close-modal-btn">&times;</button>
         </div>
+<div id="rag-db-modal" class="modal hidden">
+    <div class="modal-content" style="max-width: 900px; height: 700px;">
+        <div class="modal-header">
+            <h3 style="margin:0;">🛠️ RAG 데이터베이스 관리 (Pinecone)</h3>
+            <button onclick="document.getElementById('rag-db-modal').classList.add('hidden')" class="close-modal-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="rag-container">
+                <div class="rag-list" id="rag-list-container">
+                    <div style="text-align:center; padding:20px; color:#94a3b8;">데이터 로딩 중...</div>
+                </div>
+                
+                <div class="rag-detail" id="rag-detail-container" style="visibility: hidden;">
+                    <input type="hidden" id="rag-edit-id">
+                    
+                    <div class="rag-input-group">
+                        <span class="rag-input-label">문서 유형 (Doc Type)</span>
+                        <input type="text" id="rag-edit-type" class="rag-input">
+                    </div>
+
+                    <div class="rag-input-group">
+                        <span class="rag-input-label">사용자 검토 의견 (User Feedback)</span>
+                        <input type="text" id="rag-edit-feedback" class="rag-input">
+                    </div>
+
+                    <div class="rag-input-group" style="flex:1; display:flex; flex-direction:column;">
+                        <span class="rag-input-label">저장된 전체 내용 (Full Content - 수정 시 벡터 재생성됨)</span>
+                        <textarea id="rag-edit-content" class="rag-input" style="flex:1; resize:none;"></textarea>
+                    </div>
+
+                    <div class="rag-actions">
+                        <button class="btn-delete" onclick="deleteRagItem()">🗑️ 삭제 (Delete)</button>
+                        <button class="btn-update" onclick="updateRagItem()">💾 수정 저장 (Update)</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
         <div class="modal-body">
             <div id="pending-list-container" style="max-height: 500px; overflow-y: auto; padding: 5px;">
                 </div>
@@ -696,6 +764,145 @@ window.addEventListener('DOMContentLoaded', () => {
             // 실패 시 버튼 원복
             btn.disabled = false;
             btn.innerText = originalText;
+        }
+    }
+// =========================================================
+// [NEW] RAG DB 관리 스크립트
+// =========================================================
+    
+    // 모달 열기 & 리스트 로드
+    async function openRagDbModal() {
+        document.getElementById('rag-db-modal').classList.remove('hidden');
+        const listContainer = document.getElementById('rag-list-container');
+        document.getElementById('rag-detail-container').style.visibility = 'hidden';
+        
+        listContainer.innerHTML = '<div style="text-align:center; padding:20px;">데이터 로딩 중...</div>';
+
+        try {
+            const res = await fetch('/api/manage-rag-db', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'list' })
+            });
+            const data = await res.json();
+            
+            if(!data.success || data.list.length === 0) {
+                listContainer.innerHTML = '<div style="text-align:center; padding:20px;">저장된 데이터가 없습니다.</div>';
+                return;
+            }
+
+            listContainer.innerHTML = '';
+            data.list.forEach(doc => {
+                const el = document.createElement('div');
+                el.className = 'rag-item';
+                el.onclick = () => loadRagDetail(doc.id, el);
+                el.innerHTML = `
+                    <span class="rag-item-title">${doc.filename}</span>
+                    <span class="rag-item-date">${new Date(doc.created_at).toLocaleDateString()}</span>
+                `;
+                listContainer.appendChild(el);
+            });
+
+        } catch(e) {
+            listContainer.innerHTML = `<div style="color:red; padding:10px;">로딩 실패: ${e.message}</div>`;
+        }
+    }
+
+    // 상세 내용 불러오기 (Pinecone)
+    async function loadRagDetail(id, element) {
+        // Highlight active item
+        document.querySelectorAll('.rag-item').forEach(el => el.classList.remove('active'));
+        element.classList.add('active');
+
+        // Show Loading
+        const detailContainer = document.getElementById('rag-detail-container');
+        detailContainer.style.visibility = 'visible';
+        document.getElementById('rag-edit-content').value = "Loading from Pinecone...";
+        
+        try {
+            const res = await fetch('/api/manage-rag-db', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'get', docId: id })
+            });
+            const result = await res.json();
+
+            if(result.success) {
+                const meta = result.data || {};
+                document.getElementById('rag-edit-id').value = id;
+                document.getElementById('rag-edit-type').value = meta.docType || '';
+                document.getElementById('rag-edit-feedback').value = meta.userFeedback || '';
+                document.getElementById('rag-edit-content').value = meta.fullContent || '';
+            } else {
+                alert("상세 정보를 불러오지 못했습니다.");
+            }
+        } catch(e) {
+            console.error(e);
+            alert("통신 오류 발생");
+        }
+    }
+
+    // 수정 (Update)
+    async function updateRagItem() {
+        const id = document.getElementById('rag-edit-id').value;
+        if(!id) return;
+
+        if(!confirm("내용을 수정하면 AI가 이를 다시 학습(Embedding)합니다. 진행하시겠습니까?")) return;
+
+        const payload = {
+            docType: document.getElementById('rag-edit-type').value,
+            userFeedback: document.getElementById('rag-edit-feedback').value,
+            fullContent: document.getElementById('rag-edit-content').value
+        };
+
+        const btn = document.querySelector('.btn-update');
+        const prevText = btn.innerText;
+        btn.innerText = "처리 중...";
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/api/manage-rag-db', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'update', docId: id, payload: payload })
+            });
+            const result = await res.json();
+            if(result.success) {
+                alert("✅ 수정 완료! Pinecone 데이터가 업데이트되었습니다.");
+            } else {
+                alert("수정 실패: " + result.error);
+            }
+        } catch(e) {
+            alert("오류 발생: " + e.message);
+        } finally {
+            btn.innerText = prevText;
+            btn.disabled = false;
+        }
+    }
+
+    // 삭제 (Delete)
+    async function deleteRagItem() {
+        const id = document.getElementById('rag-edit-id').value;
+        if(!id) return;
+        
+        if(!confirm("정말로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) return;
+
+        try {
+            const res = await fetch('/api/manage-rag-db', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete', docId: id })
+            });
+            const result = await res.json();
+            
+            if(result.success) {
+                alert("삭제되었습니다.");
+                openRagDbModal(); // 목록 새로고침
+            } else {
+                alert("삭제 실패: " + result.error);
+            }
+        } catch(e) {
+            alert("오류 발생: " + e.message);
         }
     }
 </script>

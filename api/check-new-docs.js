@@ -89,7 +89,7 @@ export default async function handler(req, res) {
             const { count, error } = await supabase
                 .from('document_queue')
                 .select('*', { count: 'exact', head: true })
-                .in('status', ['pending', 'error']); 
+                .in('status', ['pending', 'error', "processed']); 
 
             if (error) throw error;
             return res.status(200).json({ success: true, count: count || 0 });
@@ -99,7 +99,7 @@ export default async function handler(req, res) {
             const { data, error } = await supabase
                 .from('document_queue')
                 .select('id, filename, status, created_at')
-                .in('status', ['pending', 'error'])
+                .in('status', ['pending', 'error', 'processed'])
                 .order('created_at', { ascending: true });
             
             if (error) throw error;
