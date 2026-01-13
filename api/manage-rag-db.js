@@ -1,13 +1,18 @@
 // /api/manage-rag-db.js
-import { createClient } from '@supabase/supabase-js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { Pinecone } from '@pinecone-database/pinecone';
+// [수정] import 문법을 require 문법으로 변경
+const { createClient } = require('@supabase/supabase-js');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { Pinecone } = require('@pinecone-database/pinecone');
+
+// 환경 변수 설정 (필요한 경우 dotenv 사용, Vercel 등에서는 자동 주입됨)
+// require('dotenv').config(); 
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 
-export default async function handler(req, res) {
+// [수정] export default 문법을 module.exports로 변경
+module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
     const { action, docId, payload } = req.body; 
@@ -93,4 +98,4 @@ export default async function handler(req, res) {
         console.error("RAG Management Error:", error);
         return res.status(500).json({ error: error.message });
     }
-}
+};
