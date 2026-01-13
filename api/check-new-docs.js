@@ -51,8 +51,13 @@ async function fetchGithubRules() {
     }
 }
 
-async function searchPinecone(queryText) {
+async function searchPinecone(queryData) { // 1. 변수명 변경 (queryText -> queryData)
     try {
+        // 2. 이 부분 추가: 객체로 들어오면 강제로 문자열로 변환
+        const queryText = typeof queryData === 'object' 
+            ? JSON.stringify(queryData) 
+            : String(queryData);
+
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
         
         // [수정] 임베딩 호출에도 재시도 로직 적용
