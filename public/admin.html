@@ -496,6 +496,10 @@ window.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('DOMContentLoaded', () => {
         checkPendingDocs();
         setInterval(checkPendingDocs, 30000); // 30초마다 갱신
+        
+        // [추가] 페이지 로드 시 자동으로 문서 분석 시작 (API 호출)
+        console.log("🔄 페이지 접속 감지: 신규 문서 자동 분석 시작...");
+        fetch('/api/check-new-docs', { method: 'POST' }).catch(err => console.error("자동 분석 실패:", err));
     });
 
     // [Red Dot] 대기 문서 개수 확인 (단순 카운트)
@@ -619,8 +623,11 @@ window.addEventListener('DOMContentLoaded', () => {
                             <strong style="color:#7c3aed;">🔮 RAG 분석 결과</strong>
                             <p style="margin:8px 0 0 0; white-space:pre-wrap; color:#4b5563; font-size:0.95rem;">${aiResult.step3_rag_analysis || aiResult.step3 || "결과 내용 없음"}</p>
                         </div>
+                        
+                        <textarea id="feedback-${docId}" placeholder="이 문서에 대한 검토 의견을 입력하세요. (선택사항)" style="width:100%; height:80px; margin-top:10px; padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-family:monospace;"></textarea>
+
                         <button onclick="approveDoc('${docId}')" style="width:100%; margin-top:15px; padding:12px; background:#22c55e; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:1rem;">
-                            ✅ 검토 완료 (목록에서 제거)
+                            ✅ 검토 완료 (Pinecone 저장)
                         </button>
                     `;
                     item.dataset.analyzed = "true"; // 분석 완료 플래그 설정
@@ -637,22 +644,59 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // [Approve] 검토 완료 처리 (화면에서 제거)
-    function approveDoc(docId) {
+    // [Approve] 검토 완료 처리 (DB 저장 요청)
+    async function approveDoc(docId) {
         const item = document.getElementById(`doc-${docId}`);
-        
-        // 부드럽게 사라지는 효과
-        item.style.transition = "opacity 0.3s, transform 0.3s";
-        item.style.opacity = '0';
-        item.style.transform = "translateX(20px)";
-        
-        setTimeout(() => {
-            item.remove();
-            // 목록이 비었으면 모달 닫기
-            if (document.querySelectorAll('.pending-item').length === 0) {
-                document.getElementById('pending-modal').classList.add('hidden');
+        const feedback = document.getElementById(`feedback-${docId}`)?.value || ""; // 입력된 피드백 가져오기
+
+        // 버튼 비활성화 (중복 클릭 방지)
+        const btn = item.querySelector('button');
+        const originalText = btn.innerText;
+        btn.disabled = true;
+        btn.innerText = "저장 중...";
+
+        try {
+            // [API 호출] confirm-review.js 호출
+            const response = await fetch('/api/confirm-review', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    docId: docId, 
+                    userFeedback: feedback 
+                })
+            });
+
+            const result = await response.json();
+
+            if (!result.success) {
+                throw new Error(result.error || "저장 실패");
             }
-        }, 300);
+
+            // 성공 시 UI 애니메이션
+            alert("✅ RAG 데이터베이스에 저장되었습니다.");
+
+            // 부드럽게 사라지는 효과
+            item.style.transition = "opacity 0.3s, transform 0.3s";
+            item.style.opacity = '0';
+            item.style.transform = "translateX(20px)";
+            
+            setTimeout(() => {
+                item.remove();
+                // 목록이 비었으면 모달 닫기
+                if (document.querySelectorAll('.pending-item').length === 0) {
+                    document.getElementById('pending-modal').classList.add('hidden');
+                }
+                // 빨간 점 갱신
+                checkPendingDocs();
+            }, 300);
+
+        } catch (error) {
+            console.error("저장 오류:", error);
+            alert(`⚠️ 저장 중 오류가 발생했습니다: ${error.message}`);
+            // 실패 시 버튼 원복
+            btn.disabled = false;
+            btn.innerText = originalText;
+        }
     }
 </script>
 </body>
