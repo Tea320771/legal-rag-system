@@ -3,11 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Pinecone } from '@pinecone-database/pinecone';
 
-// [추가 1] 강제 지연을 위한 헬퍼 함수
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
+// 1. 환경변수 로드 및 검증
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+const supabaseKey = process.env.SUPABASE_KEY; // service_role key
 const apiKey = process.env.GEMINI_API_KEY;
 const pineconeKey = process.env.PINECONE_API_KEY;
 
@@ -20,22 +18,8 @@ const genAI = new GoogleGenerativeAI(apiKey);
 const pinecone = new Pinecone({ apiKey: pineconeKey });
 
 // =========================================================
-// [Helper] Retry Wrapper (429 에러 대응용)
+// [Helper 1] GitHub 규칙 가져오기 (기존 로직 유지)
 // =========================================================
-// [추가 2] API 호출이 실패(429)하면 대기 후 재시도하는 함수
-async function callGeminiWithRetry(fn, retries = 3, delayMs = 10000) {
-    try {
-        return await fn();
-    } catch (error) {
-        if (error.message.includes('429') && retries > 0) {
-            console.warn(`⚠️ Quota exceeded. Retrying in ${delayMs / 1000}s... (${retries} left)`);
-            await delay(delayMs);
-            return callGeminiWithRetry(fn, retries - 1, delayMs * 2); // 대기 시간 2배로 늘림
-        }
-        throw error;
-    }
-}
-
 async function fetchGithubRules() {
     const BASE_URL = 'https://raw.githubusercontent.com/Tea320771/myweb/main';
     try {
@@ -51,12 +35,13 @@ async function fetchGithubRules() {
     }
 }
 
+// =========================================================
+// [Helper 2] Pinecone 유사 사례 검색 (기존 로직 유지)
+// =========================================================
 async function searchPinecone(queryText) {
     try {
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-        
-        // [수정] 임베딩 호출에도 재시도 로직 적용
-        const embedResult = await callGeminiWithRetry(() => embedModel.embedContent(queryText));
+        const embedResult = await embedModel.embedContent(queryText);
         const vector = embedResult.embedding.values;
 
         const index = pinecone.index("legal-rag-db");
@@ -74,22 +59,28 @@ async function searchPinecone(queryText) {
     }
 }
 
+// =========================================================
+// Main Handler
+// =========================================================
 export default async function handler(req, res) {
     if (req.method !== 'POST' && req.method !== 'GET') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
     try {
+        // [기존 기능] 단순 조회 모드 (프론트엔드 알림용)
         if (req.query.mode === 'count') {
             const { count, error } = await supabase
                 .from('document_queue')
                 .select('*', { count: 'exact', head: true })
-                .in('status', ['pending', 'error']); 
+                .in('status', ['pending', 'error']); // pending 또는 error 상태
 
             if (error) throw error;
             return res.status(200).json({ success: true, count: count || 0 });
         }
 
+        // [신규 기능 1] 리스트 조회 모드 (모달 목록 출력용)
+        // 파일명과 날짜만 가볍게 가져옵니다.
         if (req.query.mode === 'list') {
             const { data, error } = await supabase
                 .from('document_queue')
@@ -101,17 +92,21 @@ export default async function handler(req, res) {
             return res.status(200).json({ success: true, list: data });
         }
 
+        // =========================================================
+        // [RAG 파이프라인] 문서 분석 처리 (전체 또는 개별)
+        // =========================================================
         console.log("🚀 [RAG Pipeline] 문서 처리 시작...");
 
+        // [신규 기능 2] 특정 문서 ID가 지정되었는지 확인 (아코디언 클릭 시)
         let query = supabase.from('document_queue').select('*').in('status', ['pending', 'error']);
 
         if (req.body.docId) {
+            // 특정 문서 하나만 콕 집어서 처리
             console.log(`🎯 개별 처리 요청: ID ${req.body.docId}`);
             query = query.eq('id', req.body.docId);
         } else {
-            // [수정 3] 한 번에 1개씩만 처리 (무료 티어 한도 보호)
-            // 기존 limit(3) -> limit(1)
-            query = query.order('created_at', { ascending: true }).limit(1);
+            // 지정된 게 없으면 기존처럼 오래된 순서대로 3개 처리
+            query = query.order('created_at', { ascending: true }).limit(3);
         }
 
         const { data: pendingDocs, error: dbError } = await query;
@@ -123,6 +118,9 @@ export default async function handler(req, res) {
             return res.status(200).json({ success: true, count: 0, processed: [] });
         }
 
+        console.log(`⚡ ${pendingDocs.length}개의 문서를 RAG 분석합니다.`);
+        
+        // GitHub 규칙 로드
         const { readingGuide, logicGuideline } = await fetchGithubRules();
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const results = [];
@@ -131,6 +129,7 @@ export default async function handler(req, res) {
             console.log(`📄 분석 시작: ${doc.filename} (ID: ${doc.id})`);
 
             try {
+                // (A) 파일 다운로드
                 const { data: fileBlob, error: downloadError } = await supabase.storage
                     .from('legal-docs')
                     .download(doc.filename);
@@ -144,7 +143,7 @@ export default async function handler(req, res) {
                 const base64 = Buffer.from(arrayBuffer).toString('base64');
 
                 // ---------------------------------------------------------
-                // Phase 1: Gemini Call
+                // Phase 1: Extraction & Baseline Analysis (GitHub Rules)
                 // ---------------------------------------------------------
                 const phase1Prompt = `
                 너는 법률 문서 분석 전문가야. 
@@ -159,15 +158,11 @@ export default async function handler(req, res) {
                 JSON 포맷: { "extraction": "...", "baseline_analysis": "...", "search_context": "..." }
                 `;
 
-                // [수정] 재시도 로직 적용 (가장 토큰 소모가 큼)
-                const result1 = await callGeminiWithRetry(() => model.generateContent([
+                const result1 = await model.generateContent([
                     { text: phase1Prompt },
                     { inlineData: { data: base64, mimeType: 'application/pdf' } }
-                ]));
+                ]);
                 
-                // [추가] 연속 호출 방지를 위한 안전 지연 (5초)
-                await delay(5000); 
-
                 let phase1Data;
                 try {
                     phase1Data = JSON.parse(result1.response.text().replace(/```json/g, "").replace(/```/g, "").trim());
@@ -176,17 +171,15 @@ export default async function handler(req, res) {
                 }
 
                 // ---------------------------------------------------------
-                // Phase 2: Vector Search
+                // Phase 2: Vector Search (Pinecone)
                 // ---------------------------------------------------------
                 let pastCases = "검색된 유사 사례 없음";
                 if (phase1Data.search_context) {
                     pastCases = await searchPinecone(phase1Data.search_context);
-                    // [추가] 검색 후에도 잠시 지연 (2초)
-                    await delay(2000);
                 }
 
                 // ---------------------------------------------------------
-                // Phase 3: Final Analysis
+                // Phase 3: Final RAG Analysis
                 // ---------------------------------------------------------
                 const phase2Prompt = `
                 [Baseline]: ${JSON.stringify(phase1Data.baseline_analysis)}
@@ -196,8 +189,7 @@ export default async function handler(req, res) {
                 JSON 포맷: { "final_rag_analysis": "...", "issues": ["..."], "rag_reference_used": boolean }
                 `;
 
-                // [수정] 재시도 로직 적용
-                const result2 = await callGeminiWithRetry(() => model.generateContent([{ text: phase2Prompt }]));
+                const result2 = await model.generateContent([{ text: phase2Prompt }]);
                 
                 let phase2Data;
                 try {
@@ -206,6 +198,7 @@ export default async function handler(req, res) {
                     phase2Data = { final_rag_analysis: result2.response.text(), issues: [], rag_reference_used: false };
                 }
 
+                // DB 업데이트
                 const finalResult = {
                     step1_extraction: phase1Data.extraction,
                     step2_baseline: phase1Data.baseline_analysis,
@@ -227,17 +220,15 @@ export default async function handler(req, res) {
                 console.log(`✅ 처리 완료: ${doc.filename}`);
                 results.push({ filename: doc.filename, status: 'processed', result: finalResult });
 
-                // [추가] 문서 하나 처리가 완전히 끝난 후 다음 문서 처리 전 긴 휴식 (10초)
-                // 현재 limit(1)이라 루프가 한 번만 돌겠지만, 추후 확장을 위해 남겨둡니다.
-                await delay(10000); 
-
             } catch (docError) {
                 console.error(`💥 에러 발생 (${doc.filename}):`, docError.message);
                 
+                // 에러 상태 DB 저장
                 await supabase.from('document_queue')
                     .update({ status: 'error', ai_result: { error: docError.message } })
                     .eq('id', doc.id);
                     
+                // 프론트엔드에 에러 내용 전달을 위해 결과 배열에 포함
                 results.push({ filename: doc.filename, status: 'error', error: docError.message });
             }
         }
