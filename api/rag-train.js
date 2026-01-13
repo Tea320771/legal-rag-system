@@ -1,6 +1,6 @@
 // /api/rag-train.js
-import { Pinecone } from '@pinecone-database/pinecone';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+require { Pinecone } from '@pinecone-database/pinecone';
+require { GoogleGenerativeAI } from '@google/generative-ai';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -72,7 +72,7 @@ async function fetchPastExamples(queryText) {
     }
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
     // CORS 설정
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*'); 

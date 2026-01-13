@@ -1,7 +1,7 @@
 // /api/check-new-docs.js
-import { createClient } from '@supabase/supabase-js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { Pinecone } from '@pinecone-database/pinecone';
+require { createClient } from '@supabase/supabase-js';
+require { GoogleGenerativeAI } from '@google/generative-ai';
+require { Pinecone } from '@pinecone-database/pinecone';
 
 // [추가 1] 강제 지연을 위한 헬퍼 함수
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -79,7 +79,7 @@ async function searchPinecone(queryData) { // 1. 변수명 변경 (queryText -> 
     }
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
     if (req.method !== 'POST' && req.method !== 'GET') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }

@@ -1,13 +1,13 @@
 // /api/confirm-review.js
-import { createClient } from '@supabase/supabase-js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { Pinecone } from '@pinecone-database/pinecone';
+require { createClient } from '@supabase/supabase-js';
+require { GoogleGenerativeAI } from '@google/generative-ai';
+require { Pinecone } from '@pinecone-database/pinecone';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
