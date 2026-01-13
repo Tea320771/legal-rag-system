@@ -89,7 +89,7 @@ module.exports = async function handler(req, res) {
             const { count, error } = await supabase
                 .from('document_queue')
                 .select('*', { count: 'exact', head: true })
-                .in('status', ['pending', 'error', "processed']); 
+                .in('status', ['pending', 'error', 'processed']); 
 
             if (error) throw error;
             return res.status(200).json({ success: true, count: count || 0 });
