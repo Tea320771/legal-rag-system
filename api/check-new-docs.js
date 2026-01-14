@@ -84,6 +84,9 @@ module.exports = async function handler(req, res) {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
+// [수정] req.body가 없는 경우(GET 등)를 대비해 안전하게 빈 객체 할당
+    const body = req.body || {};
+
     try {
         if (req.query.mode === 'count') {
             const { count, error } = await supabase
