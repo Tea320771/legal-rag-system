@@ -1,7 +1,10 @@
 // /api/rag-train.js
+const { createClient } = require('@supabase/supabase-js'); // [추가] Supabase 연동
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
+// [추가] Supabase 클라이언트 설정
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -26,7 +29,7 @@ async function fetchGithubRules() {
     }
 }
 
-// 2. Pinecone에서 유사 사례 검색 (불량 데이터 방어 강화)
+// 2. Pinecone에서 유사 사례 검색
 async function fetchPastExamples(queryText) {
     try {
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
@@ -42,20 +45,14 @@ async function fetchPastExamples(queryText) {
                 includeMetadata: true
             });
 
-            // 1. 검색 결과 자체가 없는 경우 방어
             if (!queryResponse || !queryResponse.matches || queryResponse.matches.length === 0) {
                 return "관련된 과거 사례가 없습니다.";
             }
 
             const pastContext = queryResponse.matches.map(match => {
-                // 2. [핵심 수정] 검색은 됐는데 '메타데이터'가 비어있는 '불량 데이터' 방어
-                // match.metadata가 없으면 빈 객체 {}를 대신 사용하여 에러 방지
                 const meta = match.metadata || {}; 
-                
-                // 속성이 없으면 '알 수 없음' 등으로 대체
                 const docType = meta.docType || '문서유형 미상';
                 const feedback = meta.userFeedback || meta.fullContent || "내용 없음";
-                
                 return `- 과거 유사 사례 (${docType}): ${feedback}`;
             }).join("\n");
 
@@ -63,7 +60,7 @@ async function fetchPastExamples(queryText) {
 
         } catch (pineconeError) {
             console.warn("⚠️ Pinecone 검색 중 문제 발생 (무시하고 진행):", pineconeError.message);
-            return "과거 사례 검색 실패 (DB 연결 또는 데이터 문제)";
+            return "과거 사례 검색 실패";
         }
 
     } catch (error) {
@@ -87,18 +84,16 @@ module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
     try {
-        // [수정] files (배열) 수신
         const { step, files, docType, extraction, analysis, userFeedback } = req.body;
 
         // =========================================================
-        // STEP 1: 분석 요청 (다중 파일 처리)
+        // STEP 1: 분석 요청 (기존과 동일)
         // =========================================================
         if (step === 'analyze') {
             const { readingGuide, logicGuideline } = await fetchGithubRules();
             const specificReading = readingGuide[docType] || readingGuide["default"] || {};
             const specificLogic = logicGuideline[docType] || logicGuideline["default"] || {};
 
-            // 파일명들을 합쳐서 검색 컨텍스트 생성
             const fileNameList = files.map(f => f.fileName).join(", ");
             const searchContext = `문서 종류: ${docType}, 파일명: ${fileNameList}에 대한 해석 오류 및 피드백`;
             const pastExperiences = await fetchPastExamples(searchContext);
@@ -120,39 +115,27 @@ module.exports = async function handler(req, res) {
 
             **중요: 반드시 아래의 JSON 포맷으로만 답변해.**
             {
-                "extracted_facts": "모든 문서에서 취합한 팩트 (공통)",
-                "logic_baseline": "Task A 결과 (GitHub 규칙만 적용)",
-                "logic_rag": "Task B 결과 (GitHub 규칙 + RAG DB 적용)"
+                "extracted_facts": "...",
+                "logic_baseline": "...",
+                "logic_rag": "..."
             }
             `;
 
-            // [핵심 수정] 텍스트 프롬프트 + 여러 개의 이미지 파트 결합
             const promptParts = [{ text: analysisPrompt }];
-            
             files.forEach(file => {
                 promptParts.push({
-                    inlineData: {
-                        data: file.fileBase64,
-                        mimeType: file.mimeType
-                    }
+                    inlineData: { data: file.fileBase64, mimeType: file.mimeType }
                 });
             });
 
             const result = await model.generateContent(promptParts);
-            
-            let textResult = result.response.text();
-            textResult = textResult.replace(/```json/g, "").replace(/```/g, "").trim();
+            let textResult = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
 
             let aiResponse;
             try {
                 aiResponse = JSON.parse(textResult);
             } catch (e) {
-                console.error("JSON Parsing Error:", e);
-                aiResponse = {
-                    extracted_facts: "파싱 실패",
-                    logic_baseline: "파싱 실패",
-                    logic_rag: textResult
-                };
+                aiResponse = { extracted_facts: "파싱 실패", logic_baseline: "파싱 실패", logic_rag: textResult };
             }
 
             return res.status(200).json({
@@ -167,12 +150,12 @@ module.exports = async function handler(req, res) {
         }
 
         // =========================================================
-        // STEP 2: 저장 요청 (파일명 목록 저장)
+        // STEP 2: 저장 요청 (Supabase + Pinecone 동기화 저장)
         // =========================================================
         else if (step === 'save') {
-            // 저장 시 파일명을 콤마로 구분하여 기록
             const fileNameStr = Array.isArray(files) ? files.map(f => f.fileName).join(", ") : "Unknown File";
 
+            // 1. 임베딩 생성
             const contentForEmbedding = `
             [Doc Type]: ${docType}
             [Verified Extraction]: ${extraction}
@@ -184,11 +167,35 @@ module.exports = async function handler(req, res) {
             const embedResult = await embedModel.embedContent(contentForEmbedding);
             const vector = embedResult.embedding.values;
 
-            const index = pinecone.index("legal-rag-db");
-            const uniqueId = `manual-train-${Date.now()}`;
+            // 2. [변경] Supabase에 먼저 저장하여 ID 생성 (Sync Mode)
+            // status: 'completed'로 저장하여 바로 목록에 뜨게 함
+            const { data: dbData, error: dbError } = await supabase
+                .from('document_queue')
+                .insert({
+                    filename: `[Manual Train] ${fileNameStr}`, // 수동 학습임을 표시
+                    status: 'completed',
+                    created_at: new Date().toISOString(),
+                    ai_result: {
+                        manual_train: true, // 수동 학습 플래그
+                        docType,
+                        extraction,
+                        analysis,
+                        userFeedback,
+                        fullContent: contentForEmbedding
+                    }
+                })
+                .select() // 생성된 ID를 반환받기 위해 사용
+                .single();
 
+            if (dbError) throw new Error(`Supabase 저장 실패: ${dbError.message}`);
+
+            const dbId = String(dbData.id); // Supabase ID 획득
+
+            // 3. [변경] Supabase ID를 사용하여 Pinecone 저장
+            const index = pinecone.index("legal-rag-db");
+            
             await index.upsert([{
-                id: uniqueId,
+                id: dbId, // Supabase ID와 동일하게 설정 (핵심!)
                 values: vector,
                 metadata: {
                     fileName: fileNameStr,
@@ -200,7 +207,7 @@ module.exports = async function handler(req, res) {
                 }
             }]);
 
-            return res.status(200).json({ success: true, step: 'save', upsertId: uniqueId });
+            return res.status(200).json({ success: true, step: 'save', upsertId: dbId });
         }
 
     } catch (error) {
