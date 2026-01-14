@@ -84,7 +84,7 @@ module.exports = async function handler(req, res) {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
-// [수정] req.body가 없는 경우(GET 등)를 대비해 안전하게 빈 객체 할당
+    // [수정] req.body가 없는 경우(GET 등)를 대비해 안전하게 빈 객체 할당
     const body = req.body || {};
 
     try {
@@ -113,9 +113,10 @@ module.exports = async function handler(req, res) {
 
         let query = supabase.from('document_queue').select('*').in('status', ['pending', 'error']);
 
-        if (req.body.docId) {
-            console.log(`🎯 개별 처리 요청: ID ${req.body.docId}`);
-            query = query.eq('id', req.body.docId);
+        // [오류 수정 포인트] req.body.docId 대신 안전한 변수 body.docId 사용
+        if (body.docId) {
+            console.log(`🎯 개별 처리 요청: ID ${body.docId}`);
+            query = query.eq('id', body.docId);
         } else {
             // [수정 3] 한 번에 1개씩만 처리 (무료 티어 한도 보호)
             // 기존 limit(3) -> limit(1)
