@@ -22,7 +22,6 @@ const pinecone = new Pinecone({ apiKey: pineconeKey });
 // =========================================================
 // [Helper] Retry Wrapper (429 에러 대응용)
 // =========================================================
-// [추가 2] API 호출이 실패(429)하면 대기 후 재시도하는 함수
 async function callGeminiWithRetry(fn, retries = 3, delayMs = 10000) {
     try {
         return await fn();
@@ -30,7 +29,7 @@ async function callGeminiWithRetry(fn, retries = 3, delayMs = 10000) {
         if (error.message.includes('429') && retries > 0) {
             console.warn(`⚠️ Quota exceeded. Retrying in ${delayMs / 1000}s... (${retries} left)`);
             await delay(delayMs);
-            return callGeminiWithRetry(fn, retries - 1, delayMs * 2); // 대기 시간 2배로 늘림
+            return callGeminiWithRetry(fn, retries - 1, delayMs * 2);
         }
         throw error;
     }
@@ -51,16 +50,14 @@ async function fetchGithubRules() {
     }
 }
 
-async function searchPinecone(queryData) { // 1. 변수명 변경 (queryText -> queryData)
+async function searchPinecone(queryData) { 
     try {
-        // 2. 이 부분 추가: 객체로 들어오면 강제로 문자열로 변환
         const queryText = typeof queryData === 'object' 
             ? JSON.stringify(queryData) 
             : String(queryData);
 
         const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
         
-        // [수정] 임베딩 호출에도 재시도 로직 적용
         const embedResult = await callGeminiWithRetry(() => embedModel.embedContent(queryText));
         const vector = embedResult.embedding.values;
 
@@ -84,10 +81,27 @@ module.exports = async function handler(req, res) {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
-    // [수정] req.body가 없는 경우(GET 등)를 대비해 안전하게 빈 객체 할당
     const body = req.body || {};
 
     try {
+        // ------------------------------------------------------------------
+        // [GET] 목록 조회 (List Mode)
+        // ------------------------------------------------------------------
+        if (req.query.mode === 'list') {
+            const { data, error } = await supabase
+                .from('document_queue')
+                .select('id, filename, status, created_at')
+                // processed 상태도 목록에 포함되어야 사용자가 클릭 가능
+                .in('status', ['pending', 'error', 'processed'])
+                .order('created_at', { ascending: true });
+            
+            if (error) throw error;
+            return res.status(200).json({ success: true, list: data });
+        }
+
+        // ------------------------------------------------------------------
+        // [GET] 카운트 조회 (Count Mode)
+        // ------------------------------------------------------------------
         if (req.query.mode === 'count') {
             const { count, error } = await supabase
                 .from('document_queue')
@@ -98,29 +112,22 @@ module.exports = async function handler(req, res) {
             return res.status(200).json({ success: true, count: count || 0 });
         }
 
-        if (req.query.mode === 'list') {
-            const { data, error } = await supabase
-                .from('document_queue')
-                .select('id, filename, status, created_at')
-                .in('status', ['pending', 'error', 'processed'])
-                .order('created_at', { ascending: true });
-            
-            if (error) throw error;
-            return res.status(200).json({ success: true, list: data });
-        }
-
+        // ------------------------------------------------------------------
+        // [POST] 문서 분석 및 상세 조회 (Pipeline)
+        // ------------------------------------------------------------------
         console.log("🚀 [RAG Pipeline] 문서 처리 시작...");
 
-        let query = supabase.from('document_queue').select('*').in('status', ['pending', 'error']);
+        let query = supabase.from('document_queue').select('*');
 
-        // [오류 수정 포인트] req.body.docId 대신 안전한 변수 body.docId 사용
+        // [핵심 변경 1] 특정 ID 요청 시, 상태 제한 없이 가져오기
         if (body.docId) {
             console.log(`🎯 개별 처리 요청: ID ${body.docId}`);
-            query = query.eq('id', body.docId);
+            query = query.eq('id', body.docId); // status 필터 제거 (processed도 가져옴)
         } else {
-            // [수정 3] 한 번에 1개씩만 처리 (무료 티어 한도 보호)
-            // 기존 limit(3) -> limit(1)
-            query = query.order('created_at', { ascending: true }).limit(1);
+            // [자동 실행] 자동 실행일 때는 여전히 대기 중인 것만 처리
+            query = query.in('status', ['pending', 'error'])
+                         .order('created_at', { ascending: true })
+                         .limit(1);
         }
 
         const { data: pendingDocs, error: dbError } = await query;
@@ -137,7 +144,23 @@ module.exports = async function handler(req, res) {
         const results = [];
 
         for (const doc of pendingDocs) {
-            console.log(`📄 분석 시작: ${doc.filename} (ID: ${doc.id})`);
+            
+            // [핵심 변경 2] 이미 분석 완료된 문서는 재분석 없이 DB 결과 반환
+            if (doc.status === 'processed' && doc.ai_result) {
+                console.log(`ℹ️ [Cache] 이미 분석된 문서입니다: ${doc.filename}`);
+                // 이미 저장된 ai_result를 그대로 반환
+                results.push({ 
+                    filename: doc.filename, 
+                    status: 'processed', 
+                    result: doc.ai_result 
+                });
+                continue; // 다음 루프로 건너뜀 (API 호출 생략)
+            }
+
+            // ---------------------------------------------------------
+            // 아래부터는 'pending' 또는 'error' 상태인 문서의 실제 분석 로직
+            // ---------------------------------------------------------
+            console.log(`📄 신규 분석 시작: ${doc.filename} (ID: ${doc.id})`);
 
             try {
                 const { data: fileBlob, error: downloadError } = await supabase.storage
@@ -152,9 +175,7 @@ module.exports = async function handler(req, res) {
                 const arrayBuffer = await fileBlob.arrayBuffer();
                 const base64 = Buffer.from(arrayBuffer).toString('base64');
 
-                // ---------------------------------------------------------
                 // Phase 1: Gemini Call
-                // ---------------------------------------------------------
                 const phase1Prompt = `
                 너는 법률 문서 분석 전문가야. 
                 [Extraction Rules]: ${JSON.stringify(readingGuide)}
@@ -168,13 +189,11 @@ module.exports = async function handler(req, res) {
                 JSON 포맷: { "extraction": "...", "baseline_analysis": "...", "search_context": "..." }
                 `;
 
-                // [수정] 재시도 로직 적용 (가장 토큰 소모가 큼)
                 const result1 = await callGeminiWithRetry(() => model.generateContent([
                     { text: phase1Prompt },
                     { inlineData: { data: base64, mimeType: 'application/pdf' } }
                 ]));
                 
-                // [추가] 연속 호출 방지를 위한 안전 지연 (5초)
                 await delay(5000); 
 
                 let phase1Data;
@@ -184,19 +203,14 @@ module.exports = async function handler(req, res) {
                     phase1Data = { extraction: "Error", baseline_analysis: "Error", search_context: "" };
                 }
 
-                // ---------------------------------------------------------
                 // Phase 2: Vector Search
-                // ---------------------------------------------------------
                 let pastCases = "검색된 유사 사례 없음";
                 if (phase1Data.search_context) {
                     pastCases = await searchPinecone(phase1Data.search_context);
-                    // [추가] 검색 후에도 잠시 지연 (2초)
                     await delay(2000);
                 }
 
-                // ---------------------------------------------------------
                 // Phase 3: Final Analysis
-                // ---------------------------------------------------------
                 const phase2Prompt = `
                 [Baseline]: ${JSON.stringify(phase1Data.baseline_analysis)}
                 [Past Cases]: ${pastCases}
@@ -205,7 +219,6 @@ module.exports = async function handler(req, res) {
                 JSON 포맷: { "final_rag_analysis": "...", "issues": ["..."], "rag_reference_used": boolean }
                 `;
 
-                // [수정] 재시도 로직 적용
                 const result2 = await callGeminiWithRetry(() => model.generateContent([{ text: phase2Prompt }]));
                 
                 let phase2Data;
@@ -235,8 +248,6 @@ module.exports = async function handler(req, res) {
                 console.log(`✅ 처리 완료: ${doc.filename}`);
                 results.push({ filename: doc.filename, status: 'processed', result: finalResult });
 
-                // [추가] 문서 하나 처리가 완전히 끝난 후 다음 문서 처리 전 긴 휴식 (10초)
-                // 현재 limit(1)이라 루프가 한 번만 돌겠지만, 추후 확장을 위해 남겨둡니다.
                 await delay(10000); 
 
             } catch (docError) {
