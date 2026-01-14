@@ -1,6 +1,6 @@
 // /api/rag-train.js
-require { Pinecone } from '@pinecone-database/pinecone';
-require { GoogleGenerativeAI } from '@google/generative-ai';
+const { Pinecone } = require('@pinecone-database/pinecone');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
