@@ -174,6 +174,7 @@ module.exports = async function handler(req, res) {
                 .insert({
                     filename: `[Manual Train] ${fileNameStr}`, // 수동 학습임을 표시
                     status: 'completed',
+                    file_url: "manual_entry",
                     created_at: new Date().toISOString(),
                     ai_result: {
                         manual_train: true, // 수동 학습 플래그
