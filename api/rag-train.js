@@ -195,18 +195,20 @@ module.exports = async function handler(req, res) {
             // 3. [변경] Supabase ID를 사용하여 Pinecone 저장
             const index = pinecone.index("legal-rag-db");
             
+            // [수정] 메타데이터 길이 제한 및 Null 방지 처리
             await index.upsert([{
-                id: dbId, // Supabase ID와 동일하게 설정 (핵심!)
-                values: vector,
-                metadata: {
-                    fileName: fileNameStr,
-                    docType,
-                    type: "verified_instruction",
-                    userFeedback: userFeedback, 
-                    fullContent: contentForEmbedding,
-                    createdAt: new Date().toISOString()
-                }
-            }]);
+            id: dbId, 
+            values: vector,
+            metadata: {
+            fileName: fileNameStr || "Unknown File",   // null 방지
+            docType: docType || "Unknown",             // null 방지
+             type: "verified_instruction",
+            userFeedback: userFeedback || "",          // null 방지
+            // [핵심 수정] Pinecone 메타데이터 40KB 제한을 피하기 위해 텍스트 자르기 (예: 2000자)
+            fullContent: contentForEmbedding.substring(0, 2000), 
+            createdAt: new Date().toISOString()
+        }
+}]);
 
             return res.status(200).json({ success: true, step: 'save', upsertId: dbId });
         }
